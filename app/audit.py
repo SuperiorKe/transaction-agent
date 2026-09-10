@@ -16,8 +16,8 @@ EVENT_TYPES = frozenset(
         "call.ended",
         "call.redial",
         "call.guard_blocked",
-        "stream.started",
-        "stream.stopped",
+        "call.input_received",
+        "call.response_sent",
         "tool.called",
         "tool.rejected",
         "policy.evaluated",
@@ -27,7 +27,6 @@ EVENT_TYPES = frozenset(
         "recommendation.created",
         "approval.recorded",
         "confirmation.retry_scheduled",
-        "time.nudge",
         "time.hard_end",
         "error",
     }

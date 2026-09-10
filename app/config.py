@@ -4,20 +4,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration. Field names map 1:1 to `.env.example` (epic #10, contract 6)."""
+    """Runtime configuration. Field names map 1:1 to `.env.example`."""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    openai_api_key: str = ""
-    openai_realtime_model: str = "gpt-realtime-2.1-mini"
-    openai_realtime_voice: str = "alloy"
-    openai_transcribe_model: str = ""
-    openai_text_model: str = ""
+    # Negotiation agent LLM (Anthropic Messages API)
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-opus-5"
+    anthropic_effort: str = (
+        "low"  # "" omits output_config.effort (required for models without effort)
+    )
+    anthropic_refusal_fallback: str = "default"  # "" disables server-side refusal fallbacks
 
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    voice_from_number: str = ""
-    webhook_base_url: str = ""
+    # Telephony (Africa's Talking Voice)
+    at_username: str = ""
+    at_api_key: str = ""
+    at_voice_number: str = ""  # the AT voice number calls are placed from, E.164
+    voice_webhook_secret: str = ""  # path segment of the callback URL; empty disables the webhook
+    webhook_base_url: str = ""  # public tunnel URL the provider calls back
     app_url: str = "http://localhost:8000"
 
     database_url: str = "sqlite:///./transaction_agent.db"
@@ -30,12 +34,7 @@ class Settings(BaseSettings):
     provider_location: str = "Nairobi"
 
     max_calls_per_day: int = 40
-    call_nudge_seconds: int = 40
-    call_hard_end_seconds: int = 75
-    call_time_limit_seconds: int = 90
-    confirm_nudge_seconds: int = 25
-    confirm_time_limit_seconds: int = 45
-    ring_timeout_seconds: int = 25
+    call_hard_end_seconds: int = 180
     confirm_retry_delay_seconds: int = 120
 
 

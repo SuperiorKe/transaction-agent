@@ -46,10 +46,8 @@ def test_owner_websocket_through_tunnel_is_closed_with_1008(client):
     ("path", "public"),
     [
         ("/webhooks/voice", True),
-        ("/webhooks/call-result", True),
-        ("/media", True),
-        ("/media/", True),
-        ("/mediafoo", False),
+        ("/webhooks/voice/some-secret", True),
+        ("/media", False),
         ("/webhooks", False),
         ("/transactions", False),
         ("/", False),

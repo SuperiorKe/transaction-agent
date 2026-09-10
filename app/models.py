@@ -1,6 +1,5 @@
 """SQLAlchemy models. Mirrors the DDL in epic #10, contract 1."""
 
-import secrets
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -17,10 +16,6 @@ def now_iso() -> str:
 
 def new_id() -> str:
     return uuid.uuid4().hex
-
-
-def new_stream_token() -> str:
-    return secrets.token_urlsafe(24)
 
 
 class Provider(Base):
@@ -73,8 +68,7 @@ class Negotiation(Base):
     clarifications: Mapped[int] = mapped_column(default=0)
     price_rejections: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(default="DIALING")
-    call_sid: Mapped[str | None] = mapped_column(unique=True)
-    stream_token: Mapped[str] = mapped_column(default=new_stream_token)
+    provider_call_id: Mapped[str | None] = mapped_column(unique=True)  # telephony session id
     end_call_requested: Mapped[bool] = mapped_column(default=False)
     escalation_trigger: Mapped[str | None]
     end_reason: Mapped[str | None]
