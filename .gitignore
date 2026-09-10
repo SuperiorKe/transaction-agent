@@ -1,0 +1,18 @@
+# Source specs: read-only, private (pitch + sponsor strategy)
+Transaction_Agent_Hackathon_Document_Pack/
+
+# Secrets and local data
+.env
+*.db
+*.db-journal
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Web
+web/node_modules/
+web/dist/

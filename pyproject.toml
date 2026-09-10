@@ -1,0 +1,39 @@
+[project]
+name = "transaction-agent"
+version = "0.1.0"
+description = "AI agent that phones real service providers and negotiates within user-set authority"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2.0",
+    "pydantic-settings>=2.0",
+    "twilio",
+    "websockets",
+    "openai",
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-m 'not sim'"
+markers = ["sim: runs agent scenarios against the OpenAI Realtime API (needs OPENAI_API_KEY)"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
