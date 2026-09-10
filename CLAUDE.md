@@ -31,10 +31,12 @@ The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System
 | Python deps | `uv sync` |
 | Seed the 2 providers (from `.env`) | `uv run python -m app.seed` |
 | API server | `uv run uvicorn app.main:app --reload --port 8000` |
-| Public tunnel for Twilio | `cloudflared tunnel --url http://localhost:8000`, then put the URL in `WEBHOOK_BASE_URL` |
+| Public tunnel for Africa's Talking callbacks | `cloudflared tunnel --url http://localhost:8000`, then put the URL in `WEBHOOK_BASE_URL` |
 | Tests (offline; `sim` marker excluded) | `uv run pytest` |
 | Single test | `uv run pytest tests/test_states.py::test_terminal_states_have_no_outgoing_transitions -q` |
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` |
+| Live Anthropic tests (needs `ANTHROPIC_API_KEY`) | `uv run pytest -m live` |
+| Check `ANTHROPIC_MODEL` is available to your key | `uv run python -m app.llm.anthropic` |
 
 `grep` in this shell is ugrep, which rejects long bounded regexes. Use `command grep` or Python for those.
 
@@ -61,7 +63,7 @@ Canonical test scenario: "Photographer for Monday in Nairobi. Max KES 20,000. Ne
 
 ## Planned system (Prototype 0)
 
-Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engine → telephony provider (voice streamed to and from the LLM) → provider → outcome evaluator → user approval → confirmation.
+Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engine → telephony provider (turn-based: recording → speech-to-text → LLM → text-to-speech) → provider → outcome evaluator → user approval → confirmation.
 
 - **Data model:** `providers`, `transactions`, `negotiations`, `offers`, `approvals`, `audit_events` (fields in spec 02 §5). Providers are seeded; discovery is out of scope for P0.
 - **API:**
@@ -92,13 +94,19 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
 |---|---|
 | Backend | FastAPI on Python 3.12, SQLAlchemy 2 |
 | State | SQLite via `DATABASE_URL`; tables created on startup, no migrations (delete the DB file after a schema change) |
-| Telephony | Twilio pay-as-you-go + Media Streams, reached through a cloudflared quick tunnel |
-| Voice + reasoning | OpenAI Realtime API bridged by our FastAPI WebSocket (`gpt-realtime-2.1-mini` for dev, `gpt-realtime-2.1` for the demo) |
+| Telephony | Africa's Talking Voice behind `TelephonyProvider` (`app/telephony/`). Turn-based: callback webhook → `<Say>` inside a partial `<Record>` → `recordingUrl` → next turn. Reached through a cloudflared quick tunnel. AT's voice sandbox doesn't work, so real calls need a live or test number. |
+| Speech-to-text | Required because AT has no speech recognition. Behind `SpeechToText` (`app/speech/`); the concrete provider isn't chosen yet. |
+| Reasoning | Anthropic Messages API behind `LLMProvider` (`app/llm/`). Model from `ANTHROPIC_MODEL` (default `claude-opus-5`, effort `low`, server-side refusal fallbacks). |
 | UI | Vite + React + TS in `web/`, built to `web/dist` and served by FastAPI |
 | Workflow | Plain asyncio tasks |
 | Demo fallback | A rehearsal recording, labelled on screen and never presented as live |
 
-Owner routes are local only. `app/middleware.py` returns 403 for anything arriving through the tunnel (it carries a `cf-connecting-ip` header) except `/webhooks/*` and `/media`.
+Owner routes are local only. `app/middleware.py` returns 403 for anything arriving through the tunnel (it carries a `cf-connecting-ip` header) except `/webhooks/*`. Voice callbacks go to `/webhooks/voice/{VOICE_WEBHOOK_SECRET}`, because AT doesn't sign its requests.
+
+Vendor boundaries are enforced by `tests/test_architecture.py`:
+- `app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py` and `app/numbers.py` never import telephony or a model SDK.
+- Vendor code lives only in `app/telephony/africastalking.py` and `app/llm/anthropic.py`.
+- Offline tests use `FakeTelephonyProvider`, `ScriptedLLMProvider` and `FakeSpeechToText`. No test needs a phone number or AT credentials.
 
 ## Build priorities and scope
 

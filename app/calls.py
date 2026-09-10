@@ -31,7 +31,6 @@ class _Session:
     agent: ConversationAgent
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     silent_turns: int = 0
-    last_turn: AgentTurn | None = None
 
 
 class CallCoordinator:
@@ -68,23 +67,20 @@ class CallCoordinator:
 
         async with session.lock:
             turn = await self._next_turn(session, event, is_new)
-            session.last_turn = turn
         return self._telephony.render(turn)
 
     async def _next_turn(
         self, session: _Session, event: CallAnswered | CallerSpoke | CallerSilent, is_new: bool
     ) -> AgentTurn:
-        if isinstance(event, CallAnswered):
-            if not is_new and session.last_turn is not None:
-                return session.last_turn  # duplicate answered callback: repeat, don't restart
-            return await session.agent.start()
-
         if isinstance(event, CallerSpoke) and event.text.strip():
             session.silent_turns = 0
             return await session.agent.respond(CallerMessage(event.text.strip()))
 
-        if is_new:  # silence before we ever spoke: open the call normally
+        if is_new:  # first event of the call: the agent speaks first
             return await session.agent.start()
+
+        # Silence, an empty transcript, or a repeat "answered" event for a live call
+        # (Africa's Talking posts one when a recording captured nothing).
         session.silent_turns += 1
         if session.silent_turns >= self._max_silent_turns:
             return AgentTurn(SILENCE_GOODBYE, end_call=True, note="caller_silent")

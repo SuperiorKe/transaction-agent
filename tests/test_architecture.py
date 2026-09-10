@@ -19,6 +19,7 @@ RULES = {
     "llm/fake.py": ("app.telephony", "app.agent", *VENDOR_SDKS),
     "telephony": ("app.llm", "app.agent", "anthropic", "twilio", "openai"),
     "calls.py": ("app.llm", "app.agent", *VENDOR_SDKS),
+    "speech": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
 }
 
 

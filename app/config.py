@@ -11,15 +11,18 @@ class Settings(BaseSettings):
     # Negotiation agent LLM (Anthropic Messages API)
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-5"
-    anthropic_effort: str = (
-        "low"  # "" omits output_config.effort (required for models without effort)
-    )
+    # "" omits output_config.effort, for models that don't support it
+    anthropic_effort: str = "low"
     anthropic_refusal_fallback: str = "default"  # "" disables server-side refusal fallbacks
 
     # Telephony (Africa's Talking Voice)
     at_username: str = ""
     at_api_key: str = ""
     at_voice_number: str = ""  # the AT voice number calls are placed from, E.164
+    at_tts_voice: str = ""  # Google TTS voice name for <Say>; "" uses AT's default
+    at_record_max_seconds: int = 15
+    at_record_silence_timeout_seconds: int = 3
+    at_recording_hosts: str = "africastalking.com,at-internal.com"
     voice_webhook_secret: str = ""  # path segment of the callback URL; empty disables the webhook
     webhook_base_url: str = ""  # public tunnel URL the provider calls back
     app_url: str = "http://localhost:8000"

@@ -72,13 +72,13 @@ async def test_caller_speech_reaches_agent_as_domain_message(setup):
     assert spoken(result.body)["say"] == "You said: Yes, 23,000 for six hours"
 
 
-async def test_duplicate_answered_callback_repeats_last_turn(setup):
+async def test_repeat_answered_callback_counts_as_silence_not_restart(setup):
     coordinator, _, agents = setup
-    first = await coordinator.handle_callback(answered("s1"))
+    await coordinator.handle_callback(answered("s1"))
 
-    again = await coordinator.handle_callback(answered("s1"))
+    again = spoken((await coordinator.handle_callback(answered("s1"))).body)
 
-    assert again.body == first.body
+    assert again == {"say": DIDNT_CATCH, "end_call": False}
     assert agents["s1"].started == 1
 
 
