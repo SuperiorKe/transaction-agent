@@ -95,7 +95,7 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
 | Backend | FastAPI on Python 3.12, SQLAlchemy 2 |
 | State | SQLite via `DATABASE_URL`; tables created on startup, no migrations (delete the DB file after a schema change) |
 | Telephony | Africa's Talking Voice behind `TelephonyProvider` (`app/telephony/`). Turn-based: callback webhook → `<Say>` inside a partial `<Record>` → `recordingUrl` → next turn. Reached through a cloudflared quick tunnel. AT's voice sandbox doesn't work, so real calls need a live or test number. |
-| Speech-to-text | Required because AT has no speech recognition. Behind `SpeechToText` (`app/speech/`); the concrete provider isn't chosen yet. |
+| Speech-to-text | Google Cloud Speech-to-Text v2 (`chirp_3` in `eu`) behind `SpeechToText` (`app/speech/google.py`). Required because AT has no speech recognition. `en-KE` isn't supported by v2, so `GOOGLE_STT_LANGUAGE_CODES` defaults to `en-GB`. AT's MP3 recordings are sent as-is (auto-decoding). Auth is a service-account JSON via `GOOGLE_APPLICATION_CREDENTIALS`. |
 | Reasoning | Anthropic Messages API behind `LLMProvider` (`app/llm/`). Model from `ANTHROPIC_MODEL` (default `claude-opus-5`, effort `low`, server-side refusal fallbacks). |
 | UI | Vite + React + TS in `web/`, built to `web/dist` and served by FastAPI |
 | Workflow | Plain asyncio tasks |
@@ -105,7 +105,7 @@ Owner routes are local only. `app/middleware.py` returns 403 for anything arrivi
 
 Vendor boundaries are enforced by `tests/test_architecture.py`:
 - `app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py` and `app/numbers.py` never import telephony or a model SDK.
-- Vendor code lives only in `app/telephony/africastalking.py` and `app/llm/anthropic.py`.
+- Vendor code lives only in `app/telephony/africastalking.py`, `app/speech/google.py` and `app/llm/anthropic.py`.
 - Offline tests use `FakeTelephonyProvider`, `ScriptedLLMProvider` and `FakeSpeechToText`. No test needs a phone number or AT credentials.
 
 ## Build priorities and scope

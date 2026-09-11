@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "httpx",
     "anthropic>=1.5.0",
+    "google-cloud-speech>=2.40.0",
 ]
 
 [dependency-groups]

@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     at_record_max_seconds: int = 15
     at_record_silence_timeout_seconds: int = 3
     at_recording_hosts: str = "africastalking.com,at-internal.com"
+
+    # Speech-to-text (Google Cloud Speech-to-Text v2)
+    google_application_credentials: str = ""  # service-account JSON path; "" uses ADC
+    google_cloud_project: str = ""
+    google_stt_location: str = "eu"  # chirp_3 runs in the "us" and "eu" multi-regions
+    google_stt_model: str = "chirp_3"
+    google_stt_language_codes: str = "en-GB"  # en-KE isn't supported by v2; comma-separated
+    google_stt_timeout_seconds: float = 8.0
+    google_stt_phrase_hints: str = ""  # comma-separated phrases to boost; "" disables
     voice_webhook_secret: str = ""  # path segment of the callback URL; empty disables the webhook
     webhook_base_url: str = ""  # public tunnel URL the provider calls back
     app_url: str = "http://localhost:8000"

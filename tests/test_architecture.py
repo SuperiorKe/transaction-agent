@@ -7,7 +7,7 @@ import pytest
 
 APP = Path(__file__).resolve().parent.parent / "app"
 
-VENDOR_SDKS = ("anthropic", "africastalking", "twilio", "openai", "websockets")
+VENDOR_SDKS = ("anthropic", "google", "africastalking", "twilio", "openai", "websockets")
 
 # path (relative to app/) -> module prefixes it must never import
 RULES = {
@@ -17,9 +17,11 @@ RULES = {
     "numbers.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
     "llm/base.py": ("app.telephony", "app.agent", *VENDOR_SDKS),
     "llm/fake.py": ("app.telephony", "app.agent", *VENDOR_SDKS),
-    "telephony": ("app.llm", "app.agent", "anthropic", "twilio", "openai"),
+    "telephony": ("app.llm", "app.agent", "anthropic", "google", "twilio", "openai"),
     "calls.py": ("app.llm", "app.agent", *VENDOR_SDKS),
-    "speech": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
+    "speech/base.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
+    "speech/fake.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
+    "speech/google.py": ("app.telephony", "app.llm", "app.agent", "anthropic", "twilio", "openai"),
 }
 
 
