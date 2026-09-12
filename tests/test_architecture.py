@@ -8,6 +8,14 @@ import pytest
 APP = Path(__file__).resolve().parent.parent / "app"
 
 VENDOR_SDKS = ("anthropic", "google", "africastalking", "twilio", "openai", "websockets")
+# The only source files permitted to import a vendor SDK.  Adapters may use HTTP directly,
+# but keeping this explicit prevents a future SDK import from leaking into app logic.
+ALLOWED_VENDOR_FILES = {
+    "anthropic": "llm/anthropic.py",
+    "google": "speech/google.py",
+    "africastalking": "telephony/africastalking.py",
+    "twilio": "telephony/twilio.py",
+}
 
 # path (relative to app/) -> module prefixes it must never import
 RULES = {
@@ -17,7 +25,7 @@ RULES = {
     "numbers.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
     "llm/base.py": ("app.telephony", "app.agent", *VENDOR_SDKS),
     "llm/fake.py": ("app.telephony", "app.agent", *VENDOR_SDKS),
-    "telephony": ("app.llm", "app.agent", "anthropic", "google", "twilio", "openai"),
+    "telephony": ("app.llm", "app.agent", "anthropic", "google", "openai"),
     "calls.py": ("app.llm", "app.agent", *VENDOR_SDKS),
     "speech/base.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
     "speech/fake.py": ("app.telephony", "app.llm", "app.agent", *VENDOR_SDKS),
@@ -56,11 +64,12 @@ def test_import_boundaries(target):
     assert offenders == []
 
 
-def test_no_module_imports_retired_vendors():
+def test_vendor_sdks_are_confined_to_allowed_adapter_files():
     offenders = [
         f"{path.relative_to(APP)} imports {module}"
         for path in sorted(APP.rglob("*.py"))
         for module in imported_modules(path)
-        if any(violates(module, v) for v in ("twilio", "openai", "websockets"))
+        for vendor, allowed_path in ALLOWED_VENDOR_FILES.items()
+        if violates(module, vendor) and path.relative_to(APP).as_posix() != allowed_path
     ]
     assert offenders == []
