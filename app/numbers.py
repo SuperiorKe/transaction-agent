@@ -21,14 +21,14 @@ TENS = {
 }  # fmt: skip
 SCALES = {"thousand": 1_000, "k": 1_000, "million": 1_000_000}
 
-# Words that mark a number as a count or time, not money ("six hours" is never KES 6,000).
-NON_MONEY_UNITS = frozenset(
-    {
-        "hour", "hours", "hr", "hrs", "minute", "minutes", "mins",
-        "photo", "photos", "picture", "pictures", "pics", "image", "images",
-        "day", "days", "week", "weeks", "am", "pm", "people", "guests",
-    }
-)  # fmt: skip
+# Terminators that may follow a bare number read as an implied-thousands price ("I charge
+# twenty three" -> KES 23,000). An allowlist, not a denylist: every ambiguity resolves toward
+# "not heard" (module docstring), so a bare number is only trusted as a price when nothing
+# follows it (end of utterance/clause, or punctuation) or an explicit currency word does.
+# Anything else -- "years", "months", "times", "km", any noun not listed here -- is rejected.
+MONEY_TERMINATORS = frozenset(
+    {None, ".", ",", ";", ":", "!", "?", "shilling", "shillings", "bob", "ksh", "kes", "shs"}
+)
 
 # Which token kinds may continue a number phrase after the previous kind.
 _ALLOWED_AFTER: dict[str, frozenset[str | None]] = {
@@ -126,8 +126,9 @@ def spoken_amounts(text: str) -> set[int]:
 def amount_heard(amount: int, text: str) -> bool:
     """True if the provider's words contain `amount`.
 
-    Also accepts conversational thousands ("I charge twenty-three" for KES 23,000), unless the
-    number was a count or time ("six hours").
+    Also accepts conversational thousands ("I charge twenty-three" for KES 23,000), but only
+    when nothing follows the bare number, or what follows is punctuation or a currency word
+    (see MONEY_TERMINATORS). "Twenty three years"/"twenty three times" are never money.
     """
     parsed = _parse(text)
     if any(value == amount for value, _ in parsed):
@@ -135,6 +136,5 @@ def amount_heard(amount: int, text: str) -> bool:
     if amount % 1000 or not 0 < amount // 1000 < 1000:
         return False
     return any(
-        value == amount // 1000 and terminator not in NON_MONEY_UNITS
-        for value, terminator in parsed
+        value == amount // 1000 and terminator in MONEY_TERMINATORS for value, terminator in parsed
     )

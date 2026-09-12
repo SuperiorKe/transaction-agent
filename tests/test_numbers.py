@@ -31,6 +31,9 @@ from app.numbers import amount_heard, spoken_amounts
         ("twenty thousand twenty thousand", {20_000}),
         ("about 6.5 hours", set()),
         ("okay, no problem", set()),
+        ("ok k", set()),
+        ("five and six", {5, 6}),
+        ("21 5", {5, 21}),
     ],
 )
 def test_spoken_amounts(text, expected):
@@ -51,6 +54,13 @@ def test_spoken_amounts(text, expected):
         (1_000_000, "one thousand", False),
         (19_500, "Yes. 23,000, six hours.", False),
         (21_000, "Twenty... [inaudible]", False),
+        # Regression: a bare number followed by an unrelated noun is never a price, even one
+        # not on any hardcoded exclusion list (adversarial review, ship of arch/africastalking).
+        (23_000, "I've been doing this for twenty three years", False),
+        (15_000, "I need fifteen months to deliver", False),
+        (5_000, "I called you five times", False),
+        (23_000, "twenty three, that's my price", True),
+        (20_000, "it's twenty shillings, I mean thousand", True),
     ],
 )
 def test_amount_heard(amount, text, heard):
