@@ -12,6 +12,7 @@ Verified 2026-09-11 against google-cloud-speech 2.40.0 and Google's v2 docs:
 - Constructing the client without credentials raises, so it is created on first use.
 """
 
+import asyncio
 import logging
 from collections.abc import Callable, Sequence
 
@@ -108,7 +109,8 @@ class GoogleSpeechToText:
         )
         try:
             if self._client is None:
-                self._client = self._client_factory()
+                # Construction reads credential files and may probe for ADC: keep it off the loop.
+                self._client = await asyncio.to_thread(self._client_factory)
             response = await self._client.recognize(request=request, timeout=self._timeout_seconds)
         except (auth_exceptions.GoogleAuthError, OSError, ValueError) as exc:
             raise SpeechToTextError(f"Google credentials unavailable: {exc}") from exc
