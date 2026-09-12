@@ -1,774 +1,388 @@
-# Transaction Agent
+# Nego
 
-An AI procurement agent that **negotiates with suppliers on behalf of businesses — by phone — while staying within purchasing rules set by the business.**
+### The negotiation layer for procurement.
 
-Transaction Agent turns a business's purchasing mandate into a bounded AI agent:
+**Nego is an AI procurement agent that negotiates with suppliers on behalf of businesses — within purchasing rules defined by the business.**
 
-> "We need 500kg of produce this week. Maximum KES 80,000. Stay within budget, negotiate up to three times, and don't commit without approval."
-
-The agent contacts a supplier, conducts the conversation, evaluates every offer against the purchasing policy, and returns the best compliant outcome for a human to approve or decline.
-
-**The agent negotiates. The business stays in control.**
-
-Built for the AI Tinkerers Nairobi **"Agents, Everywhere"** hackathon (12 Sept 2026) as a focused vertical slice.
+Built for the **AI Tinkerers Nairobi — “Agents, Everywhere” Global Hackathon**, Nego explores what happens when an AI agent moves beyond chat and into the real-world conversations that happen before a business transaction.
 
 ---
 
 ## The problem
 
-Many businesses in Kenya still negotiate with suppliers through **phone calls and WhatsApp**, not APIs or procurement portals.
+Procurement software is good at managing suppliers, purchase orders, approvals, invoices, and transactions.
 
-A procurement officer may repeatedly have to:
+But a significant part of purchasing still happens outside those systems:
 
-* call suppliers for prices;
-* negotiate discounts;
-* clarify quantities and terms;
-* compare counteroffers;
-* make sure the agreed price stays within an approved budget;
-* document what was agreed.
+**The conversation.**
 
-Traditional procurement software is good at managing structured workflows.
+* “What's your best price?”
+* “Can you deliver tomorrow?”
+* “We need 500kg, not 300kg.”
+* “That's above our approved budget.”
+* “Can you do better if we order regularly?”
 
-It is much less useful when the supplier's interface is simply:
+For many businesses, these conversations are repetitive, time-consuming, and difficult to automate safely.
 
-**a person answering a phone.**
-
-Transaction Agent is designed for that layer.
+Nego is built to handle that negotiation layer.
 
 ---
 
-## What it does
+## What Nego does
 
-You give the agent an objective and a bounded purchasing mandate — **not a blank cheque**.
+A business gives Nego a purchasing mandate:
 
-For example:
+> **We need 500kg of produce. Maximum KES 80,000. Delivery tomorrow. Negotiate up to three times. Do not commit without approval.**
 
-> "Photographer for Monday in Nairobi. Maximum KES 20,000. Negotiate twice. Never agree above KES 20,000 without my approval."
+Nego then:
 
-The agent then:
+1. Understands the purchasing mandate
+2. Contacts the supplier
+3. Conducts the negotiation
+4. Evaluates each offer against the purchasing rules
+5. Rejects offers that violate the mandate
+6. Counters within the allowed limits
+7. Presents the final compliant offer to a human
+8. Waits for approval before the final commitment
 
-1. **Selects a known supplier** from the business's supplier list.
-2. **Places a real outbound phone call** using Twilio.
-3. Handles the supplier's spoken response through the voice pipeline.
-4. Uses an LLM to conduct the natural-language conversation.
-5. Evaluates offers against deterministic purchasing rules.
-6. Makes a counteroffer or asks for clarification when permitted.
-7. **Stops when the business's authority boundary is reached.**
-8. Returns the resulting offer and recommendation to the business.
-9. Records the decisions and state changes in an audit trail.
+### Example
 
-The critical design principle is:
+**Business mandate**
 
-> **The LLM handles language. Deterministic code enforces authority.**
+| Requirement      | Rule             |
+| ---------------- | ---------------- |
+| Product          | 500kg vegetables |
+| Maximum budget   | KES 80,000       |
+| Delivery         | Tomorrow         |
+| Maximum counters | 3                |
+| Final commitment | Human approval   |
 
-The model does not decide whether an offer is acceptable simply because a prompt tells it to.
-
-The budget cap, negotiation attempt limit, required terms, escalation behaviour, and accept/counter/stop decisions are evaluated in Python (`app/policy.py`).
-
----
-
-## Why voice?
-
-Transaction Agent is deliberately built around **voice as a supplier interface**.
-
-In our target market, a supplier does not need to expose an API, integrate with a procurement platform, or install another application.
-
-They can simply answer the phone.
-
-That means the business can keep its existing supplier relationships while delegating the repetitive negotiation layer to an agent.
-
-This is particularly relevant for recurring local procurement such as:
-
-* hospitality and produce;
-* laundry services;
-* transport and logistics;
-* catering;
-* construction haulage;
-* plant hire;
-* events and media services;
-* other locally negotiated supplier services.
-
----
-
-## Who this is for
-
-Transaction Agent is being developed for **Kenyan SMEs and mid-market businesses that repeatedly negotiate with local suppliers.**
-
-The initial product thesis focuses on businesses where:
-
-* supplier relationships already exist;
-* purchasing happens repeatedly;
-* prices or terms are negotiated frequently;
-* suppliers primarily communicate through phone or messaging;
-* employees spend meaningful time handling repetitive negotiations;
-* purchases have clear approval limits.
-
-### Initial wedge
-
-The first target category is **recurring hospitality procurement**, particularly produce.
-
-The reasoning is simple:
-
-* purchases happen frequently;
-* prices can change;
-* supplier relationships already exist;
-* negotiations are relatively understandable;
-* the financial risk of an individual failed negotiation is manageable;
-* successful negotiations can produce measurable savings.
-
-Other categories can be added later.
-
----
-
-## The business model
-
-Transaction Agent is a **B2B SaaS product**.
-
-The **business buying the software pays for it**.
-
-Suppliers do not pay to influence negotiations.
-
-The product is intended to use a subscription model with an included allowance of negotiations and metered usage beyond that allowance.
-
-The commercial unit is **the negotiation**, rather than raw call minutes, because businesses can understand and budget for negotiations more easily than telecommunications usage.
-
-Pricing and unit economics are still being validated.
-
----
-
-## Why the business pays
-
-The product is intended to create value in three places:
-
-### 1. Money saved
-
-The agent can negotiate within the purchasing mandate rather than simply accepting the supplier's first quote.
-
-### 2. Employee time saved
-
-Procurement and operations staff can delegate repetitive supplier conversations while retaining approval authority.
-
-### 3. Purchasing control
-
-Every negotiation is constrained by explicit rules and recorded in an audit trail.
-
-The goal is not to replace procurement teams.
-
-It is to give them an **automated negotiation layer**.
-
----
-
-## Human approval is the transaction boundary
-
-Transaction Agent does not treat successful negotiation as automatic authorization to purchase.
-
-The agent can negotiate within its delegated authority, but the business remains responsible for the final commitment.
-
-Conceptually:
+**Negotiation**
 
 ```text
-Business
-   │
-   │ purchasing mandate
-   ▼
-Transaction Agent
-   │
-   │ phone negotiation
-   ▼
-Supplier
-   │
-   │ offers / counteroffers
-   ▼
-Policy Engine
-   │
-   ├── within authority → continue
-   ├── counter allowed → negotiate
-   ├── outside authority → stop / escalate
-   └── acceptable outcome → recommendation
-                              │
-                              ▼
-                       Human approval
-                              │
-                         approve / decline
+AGENT
+We're looking for 500kg of mixed vegetables delivered tomorrow.
+What can you offer?
+
+SUPPLIER
+I can do KES 95,000.
+
+POLICY ENGINE
+❌ Offer exceeds maximum budget.
+Maximum: KES 80,000.
+
+AGENT
+That's above our approved budget.
+Can you improve the price?
+
+SUPPLIER
+Best I can do is KES 87,000.
+
+POLICY ENGINE
+❌ Offer still exceeds maximum budget.
+
+AGENT
+If we confirm the full 500kg order and continue ordering regularly,
+can you meet KES 80,000?
+
+SUPPLIER
+Yes. KES 80,000 delivered tomorrow.
+
+POLICY ENGINE
+✅ Offer satisfies the purchasing mandate.
 ```
 
-This distinction is fundamental to the architecture.
-
-**Negotiation can be delegated. Final purchasing authority does not have to be.**
+The final offer is then presented for human approval.
 
 ---
 
-## Deterministic policy enforcement
+## Why Nego is different
 
-The core safety mechanism is deliberately outside the LLM.
+Nego isn't simply a chatbot that talks to suppliers.
 
-For example, a business may define:
+It separates **conversation** from **authority**.
 
-* maximum budget;
-* maximum negotiation attempts;
-* required quantity;
-* required service terms;
-* escalation conditions;
-* whether final acceptance requires approval.
+### The AI handles
 
-The LLM can propose an action.
+* Natural-language conversation
+* Questions to suppliers
+* Negotiation
+* Counteroffers
+* Clarifying requirements
+* Gathering commercial terms
 
-The policy engine decides whether that action is actually allowed.
+### The policy layer controls
 
-```text
-LLM proposes:
+* Maximum budget
+* Required quantities
+* Required delivery conditions
+* Maximum negotiation attempts
+* Approval requirements
+* Actions the agent is not permitted to take
 
-"Accept KES 85,000"
+This means the AI can be flexible in conversation without being free to invent its own purchasing authority.
 
-        ↓
-
-Policy engine:
-
-Maximum = KES 80,000
-
-        ↓
-
-REJECTED
-```
-
-The model cannot override the result by changing its wording.
-
-This is the central technical principle of Transaction Agent:
-
-> **Natural language is handled by the model. Authority is enforced by code.**
+> **The AI negotiates. The business stays in control.**
 
 ---
 
-## Auditability
+## The product
 
-Every important transaction decision is recorded.
+###  AI negotiation
 
-The data model includes:
+Nego can conduct a supplier conversation rather than simply recommend what a buyer should say.
 
-* `providers`
-* `transactions`
-* `negotiations`
-* `offers`
-* `recommendations`
-* `approvals`
-* `audit_events`
+###  Policy enforcement
 
-For a business, the audit trail is more than debugging information.
+Every offer can be evaluated against deterministic purchasing rules.
 
-It provides a record of:
+###  Bounded negotiation
 
-* what authority was delegated;
-* what the supplier offered;
-* what the agent proposed;
-* why an offer was accepted or rejected;
-* when the agent stopped;
-* whether human approval was required.
+The business defines how far the agent is allowed to negotiate.
 
-This is important because **delegating purchasing conversations to software requires evidence that the software respected the mandate.**
+###  Human approval
+
+The agent does not make the final purchasing commitment without the required human approval.
+
+###  Negotiation visibility
+
+The business can see what was requested, what the supplier offered, how the offer was evaluated, and why the final outcome was accepted or rejected.
 
 ---
 
-## Current status
+## Safety model
 
-This is a hackathon prototype being developed as a focused vertical slice.
+Nego is designed around three levels of authority.
 
-### Working today, offline-tested
+###  Agent can do automatically
 
-* Deterministic policy engine: accept/counter/clarify/escalate/stop decisions, counteroffer math, and recommendation generation (`app/policy.py`).
-* Transaction/negotiation state machine with enforced legal transitions (`app/states.py`).
-* Real outbound calling through **Twilio Voice** behind a `TelephonyProvider` interface.
-* Voice webhook and turn-based call coordination (`app/routes/voice.py`, `app/calls.py`).
-* Voice/speech processing through the current Twilio-based voice pipeline.
-* Negotiation conversation through the Anthropic Messages API with a deliberately narrow tool surface (`app/agent/`, `app/conversation.py`).
-* Offline test suite using fakes for external vendors.
-* SQLAlchemy data model and append-only audit trail.
+* Ask for prices
+* Ask questions
+* Negotiate
+* Request better terms
+* Request alternatives
+* Gather supplier information
 
-### Operational safeguards
+###  Human approval required
 
-The prototype also defines operational limits for live calling:
+* Accept a final offer
+* Confirm a booking
+* Schedule a service
+* Make a purchasing commitment
 
-* `MAX_CALLS_PER_DAY` limits daily call volume.
-* `CALL_HARD_END_SECONDS` provides a hard upper bound on call duration.
+###  Agent must never
 
-The current configuration uses a **180-second hard call ceiling**, which puts a concrete upper bound on the telephony exposure of a single negotiation.
+* Exceed the approved budget
+* Ignore mandatory purchasing requirements
+* Make an unauthorized purchase
+* Reveal sensitive business information
+* Negotiate indefinitely
 
-### Still being wired
+The objective isn't to make an AI that says **yes** to everything.
 
-* `POST /transactions` REST API for creating transactions and exposing approval/decline actions.
-* Owner UI (`web/`) for creating transactions and reviewing outcomes.
-* Full end-to-end persistence and orchestration from transaction creation through negotiation and approval.
-
-Check `TODOS.md` and the GitHub issues for the exact remaining implementation work.
+It is to make an AI that knows **what it is allowed to say yes to**.
 
 ---
 
 ## Architecture
 
 ```text
-Business / Owner UI
-        │
-        ▼
-     FastAPI
-        │
-        ▼
-Transaction Orchestrator
-        │
-        ├──────────────► Policy Engine
-        │                 app/policy.py
-        │
-        ▼
- Negotiation Agent
-        │
-        ▼
-   Twilio Voice
-        │
-        ▼
-     Supplier
-        │
-        │ spoken response
-        ▼
-   Voice Pipeline
-        │
-        ▼
-      LLM
-   Anthropic
-        │
-        ▼
- Policy Evaluation
-        │
-        ├── continue negotiating
-        ├── counter
-        ├── clarify
-        ├── escalate
-        └── stop
-        │
-        ▼
- Recommendation
-        │
-        ▼
- Human Approval
+                    BUSINESS
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Purchasing      │
+              │ Mandate         │
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Nego Agent      │
+              │                 │
+              │ Conversation    │
+              │ Negotiation     │
+              │ Reasoning       │
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Policy Engine   │
+              │                 │
+              │ Budget          │
+              │ Quantity        │
+              │ Terms           │
+              │ Counter limit   │
+              └────────┬────────┘
+                       │
+                       ▼
+                 SUPPLIER
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Final Offer     │
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │ Human Approval  │
+              └─────────────────┘
 ```
 
-### Technology
-
-| Layer                 | Choice                         | Purpose                                     |
-| --------------------- | ------------------------------ | ------------------------------------------- |
-| Backend               | FastAPI + Python 3.12          | Application/API layer                       |
-| State                 | SQLite + SQLAlchemy 2          | Transaction and audit persistence           |
-| Telephony             | **Twilio Voice**               | Real phone calls                            |
-| Speech/voice pipeline | **Current Twilio voice stack** | Handle the live voice interaction           |
-| Reasoning             | Anthropic Messages API         | Natural-language negotiation                |
-| UI                    | Vite + React + TypeScript      | Owner interface                             |
-| Workflow              | Python asyncio                 | Lightweight orchestration for the hackathon |
+The architecture is intentionally designed so that the conversational model does not become the final authority over a business transaction.
 
 ---
 
-## Vendor isolation
+## Why procurement?
 
-External vendors are isolated behind interfaces.
+Nego is initially focused on business purchasing scenarios where supplier negotiation is frequent and still happens through direct human communication.
 
-`app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py`, and `app/numbers.py` do not import telephony or model SDKs directly.
+Potential use cases include:
 
-Vendor-specific integrations are kept behind their respective adapters.
+* Hospitality procurement
+* Fresh produce purchasing
+* Catering
+* Transport
+* Construction services
+* Equipment and plant hire
+* Events and media services
+* Recurring local business suppliers
 
-The telephony integration is:
+The initial hackathon demonstration uses a supplier negotiation scenario to show the core capability.
+
+---
+
+## Built for “Agents, Everywhere”
+
+The AI Tinkerers Nairobi challenge asks:
+
+> **What happens when agents belong somewhere new?**
+
+Nego explores the **real-world communication layer** of business procurement.
+
+Instead of waiting for a user to open a chatbot and ask what to do, the agent can take a defined mandate into an environment where the actual business interaction happens.
+
+**The agent doesn't just advise the buyer. It represents the buyer within defined boundaries.**
+
+---
+
+## Technology
+
+The project is built around a modular agent architecture with:
+
+* Python
+* FastAPI
+* Anthropic models
+* Policy-based decision logic
+* Telephony abstraction
+* Twilio Voice integration
+* Configurable call limits
+* Human approval boundaries
+
+The telephony layer is abstracted so that the negotiation agent and policy logic are not tightly coupled to a single communications provider.
+
+---
+
+## Operational safeguards
+
+The system includes operational controls designed to prevent runaway calls and excessive usage.
 
 ```text
-app/telephony/
+MAX_CALLS_PER_DAY=40
+CALL_HARD_END_SECONDS=180
 ```
 
-and the Twilio implementation sits behind the `TelephonyProvider` interface.
+These provide:
 
-Offline tests use fake providers so the negotiation and policy logic can be tested without making real calls or consuming external API credits.
+* A daily call-volume ceiling
+* A hard maximum duration for an individual call
 
-The architecture test (`tests/test_architecture.py`) enforces this separation.
+These limits are separate from the commercial pricing model and exist as operational safety controls.
 
 ---
 
-## Tool surface
+## Current status
 
-The model receives a deliberately narrow set of tools:
+Nego is a **hackathon prototype / proof of concept**, not a production procurement platform.
+
+The current goal is to demonstrate the core loop:
 
 ```text
-find_provider
-get_transaction_policy
-start_call
-record_offer
-request_user_approval
-confirm_booking
-end_call
-```
-
-It does not receive arbitrary database, HTTP, or infrastructure access.
-
-Most importantly, the model cannot simply decide that a transaction is acceptable.
-
-Actions are re-evaluated by deterministic code before they are allowed to proceed.
-
----
-
-## Hard agent rules
-
-The agent is designed to:
-
-* identify itself as an AI when asked;
-* never invent a price, availability, or agreement;
-* never claim confirmation before confirmation exists;
-* never guess an unclear spoken number;
-* ask the supplier to repeat unclear information;
-* treat every changed price as a new offer;
-* re-evaluate every offer against the current policy;
-* never exceed the delegated purchasing authority;
-* stop or escalate when an action is outside its authority.
-
----
-
-## Data model
-
-The core entities are:
-
-```text
-providers
-transactions
-negotiations
-offers
-recommendations
-approvals
-audit_events
-```
-
-Providers are currently seeded from `.env`.
-
-**Provider discovery is intentionally outside the current hackathon scope.**
-
-The product assumes that a business already has suppliers it is permitted to contact.
-
----
-
-## State machine
-
-```text
-CREATED
-   ↓
-PROVIDER_SELECTED
-   ↓
-CALLING
-   ↓
-NEGOTIATING
-   ├──► AGREED_WITHIN_POLICY → RESULT_READY
-   ├──► OUTSIDE_AUTHORITY    → AWAITING_APPROVAL
-   ├──► UNAVAILABLE          → NEXT_PROVIDER / FAILED
-   └──► FAILED
-
-RESULT_READY / AWAITING_APPROVAL
-   ├──► APPROVED → CONFIRMING → CONFIRMED
-   └──► DECLINED → CLOSED
-```
-
-Every transition is checked against an explicit allow-list in:
-
-```text
-app/states.py::ALLOWED_TRANSITIONS
-```
-
-Invalid transitions raise an error instead of silently occurring.
-
----
-
-## Setup
-
-Toolchain is pinned in `mise.toml`.
-
-```bash
-# 1. Install the pinned toolchain
-mise install
-
-# If your shell has not picked up mise:
-# prefix commands with:
-# mise exec --
-
-# 2. Install Python dependencies
-uv sync
-
-# 3. Configure environment
-cp .env.example .env
-```
-
-For a real call, configure the required credentials and provider information in `.env`:
-
-```text
-ANTHROPIC_API_KEY
-ANTHROPIC_MODEL
-TWILIO_ACCOUNT_SID
-TWILIO_AUTH_TOKEN
-TWILIO_PHONE_NUMBER
-VOICE_WEBHOOK_SECRET
-WEBHOOK_BASE_URL
-```
-
-Never commit `.env`.
-
-Seed the configured providers:
-
-```bash
-uv run python -m app.seed
-```
-
-Run the API:
-
-```bash
-uv run uvicorn app.main:app --reload --port 8000
-```
-
-To expose the local webhook to Twilio:
-
-```bash
-cloudflared tunnel --url http://localhost:8000
-```
-
-Configure the Twilio Voice webhook to point to the appropriate voice callback under:
-
-```text
-$WEBHOOK_BASE_URL
-```
-
----
-
-## Running the tests
-
-```bash
-# Offline test suite
-uv run pytest
-
-# Specific state-machine test
-uv run pytest tests/test_states.py::test_terminal_states_have_no_outgoing_transitions -q
-
-# Lint + formatting
-uv run ruff check .
-uv run ruff format --check .
-
-# Tests that hit real external APIs
-uv run pytest -m live
-```
-
-The default test suite does not require:
-
-* a Twilio phone number;
-* Twilio credentials;
-* an Anthropic API key;
-* external voice infrastructure.
-
-Tests use an in-memory SQLite database and fake external providers.
-
----
-
-## Scope & limitations
-
-Transaction Agent is intentionally **not** a full procurement platform yet.
-
-### Not in the current hackathon scope
-
-* supplier marketplace;
-* universal supplier discovery;
-* web scraping;
-* payments;
-* automatic purchasing without approval;
-* multi-agent swarm architecture;
-* complex analytics dashboard;
-* production authentication;
-* billing;
-* enterprise SSO;
-* multiple procurement categories;
-* large-scale worker/queue infrastructure.
-
-The current prototype uses **known/seeded suppliers**.
-
-That is deliberate.
-
-A business already has suppliers. The product's initial job is to automate the negotiation with those suppliers, not to build another marketplace.
-
----
-
-## Known failure handling
-
-### Supplier does not answer
-
-The provider is marked unavailable and another seeded provider may be attempted if one exists.
-
-### Call drops
-
-The system can retry within the configured retry policy or surface the partial result.
-
-### Supplier gives an offer outside authority
-
-The agent does not accept it.
-
-The transaction is stopped or escalated according to policy.
-
-### Supplier asks an unclear question
-
-The agent asks for clarification rather than inventing an answer.
-
-### Live telephony is unavailable
-
-A rehearsal recording can be used for the hackathon demonstration.
-
-It is explicitly labelled as a rehearsal and never presented as a live call.
-
----
-
-## Product direction
-
-The long-term product thesis is:
-
-> **The negotiation layer for procurement.**
-
-Existing procurement systems manage structured purchasing workflows.
-
-Transaction Agent is intended to handle the messy human interaction that happens before a transaction:
-
-**the phone calls, questions, counteroffers and negotiations.**
-
-The first wedge is narrow:
-
-```text
-Kenyan business
-      ↓
-Recurring local procurement
-      ↓
-Known suppliers
-      ↓
-Phone negotiation
-      ↓
-AI agent
-      ↓
-Deterministic purchasing policy
-      ↓
+Purchasing mandate
+       ↓
+Supplier conversation
+       ↓
+Offer
+       ↓
+Policy evaluation
+       ↓
+Counteroffer
+       ↓
+Compliant offer
+       ↓
 Human approval
 ```
 
-From there, the product can expand into additional supplier categories and procurement workflows.
-
-The current priority is **not** building every procurement feature.
-
-It is proving that a business can safely delegate a real supplier negotiation to an AI agent without giving the agent unrestricted purchasing authority.
+The project deliberately focuses on this narrow vertical slice rather than attempting to build a complete procurement suite.
 
 ---
 
-## Roadmap
+## What Nego is not
 
-### P0 — Hackathon prototype
+Nego is not:
 
-Prove the negotiation mechanism:
+* A supplier marketplace
+* A generic chatbot
+* An AI purchasing system with unrestricted authority
+* A price-scraping engine
+* A replacement for procurement teams
 
-* one procurement category;
-* seeded suppliers;
-* real outbound voice;
-* bounded negotiation;
-* deterministic policy enforcement;
-* audit trail;
-* human approval boundary.
+Nego is focused on one specific problem:
 
-### P1 — Pilot
-
-Validate the product with real businesses:
-
-* one repeating procurement category;
-* real supplier relationships;
-* negotiation success rate;
-* supplier willingness to talk to an AI agent;
-* average negotiation duration;
-* cost per successful negotiation;
-* measurable savings/time saved.
-
-### P2 — Product
-
-Potential expansion:
-
-* multiple supplier categories;
-* supplier list ingestion;
-* approval workflows;
-* business accounts;
-* audit exports;
-* usage metering;
-* billing;
-* stronger authentication;
-* supplier discovery where appropriate;
-* post-approval transaction execution.
-
-The roadmap should follow evidence from pilots rather than building a large procurement platform before the negotiation loop is proven.
+> **Automating the negotiation conversation while keeping purchasing authority with the business.**
 
 ---
 
-## Repo map
+## Future direction
+
+The same negotiation agent could eventually operate across multiple business communication channels:
 
 ```text
-app/
-  agent/          tool-calling negotiation engine
-  llm/            LLMProvider interface + Anthropic adapter
-  telephony/      TelephonyProvider interface + Twilio adapter
-  routes/         HTTP routes, including voice webhook
-  policy.py       deterministic offer evaluation — no I/O, pure policy logic
-  states.py       transaction state machine + allowed transitions
-  calls.py        connects telephony callbacks to conversations
-  conversation.py turn-based conversation orchestration
-  models.py       SQLAlchemy models
-  audit.py        append-only audit trail
-  config.py       application settings
-  seed.py         seeds configured providers
-  main.py         FastAPI application
-
-web/
-  owner UI — Vite + React + TypeScript
-
-tests/
-  offline tests and vendor fakes
-  test_architecture.py enforces vendor isolation
-
-CLAUDE.md
-  repository conventions, specification pointers,
-  and canonical demo scenario
-
-TODOS.md
-  follow-ups and remaining implementation work
+              ┌── Phone
+              │
+              ├── WhatsApp
+Business ────┼── Email
+Mandate       │
+              ├── Supplier portals
+              │
+              └── APIs
 ```
+
+The long-term vision is not simply an AI that can make phone calls.
+
+It is an **agentic negotiation layer for business procurement**.
 
 ---
 
-## Where the specification lives
+## Hackathon
 
-The authoritative build specification is maintained in the private GitHub planning repository:
+Built for:
 
-```text
-SuperiorKe/transaction-agent
-```
+**AI Tinkerers Nairobi — Agents, Everywhere: Bots, Channels, & More**
 
-**Epic #10** contains the shared contracts:
+**12 September 2026**
 
-* database schema;
-* state machine;
-* policy rules;
-* API shapes;
-* agent tools;
-* environment variables.
+The principle behind the build:
 
-**Issues #1–#9** define the implementation order.
-
-Where the original document pack and the GitHub issues disagree, the issues take precedence.
-
-See `CLAUDE.md` for repository conventions and specification references.
+> **No slides. Demo the thing.**
 
 ---
 
-## The core idea
+## Core idea
 
-Transaction Agent is not trying to make an AI that can **do anything**.
+**Set the mandate.
+Let Nego negotiate.
+Approve the deal.**
 
-It is trying to make an AI that can **do one consequential thing safely**:
+### Nego
 
-> **Negotiate with a supplier on behalf of a business without exceeding the authority that business gave it.**
-
-**The agent negotiates.
-The policy enforces.
-The audit trail records.
-The human remains in control.**
+**The negotiation layer for procurement.**
