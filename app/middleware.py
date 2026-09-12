@@ -1,6 +1,6 @@
 """Owner routes are local only.
 
-The cloudflared tunnel exists so Twilio can reach the webhooks and the media stream. Anything
+The cloudflared tunnel exists so the telephony provider can reach the voice webhooks. Anything
 else arriving through it (it adds `cf-connecting-ip`) is rejected, so a leaked tunnel URL can't
 start paid calls.
 """
@@ -13,7 +13,7 @@ TUNNEL_HEADER = b"cf-connecting-ip"
 
 
 def is_public_path(path: str) -> bool:
-    return path.startswith("/webhooks/") or path == "/media" or path.startswith("/media/")
+    return path.startswith("/webhooks/")
 
 
 class LocalOnlyOwnerRoutes:
