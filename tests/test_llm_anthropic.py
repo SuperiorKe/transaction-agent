@@ -165,7 +165,7 @@ async def test_assistant_payload_is_echoed_verbatim():
 @pytest.mark.parametrize(
     ("sdk_stop", "expected"),
     [("end_turn", "end_turn"), ("stop_sequence", "end_turn"), ("max_tokens", "max_tokens"),
-     ("refusal", "refusal"), ("pause_turn", "other")],
+     ("refusal", "refusal"), ("pause_turn", "other"), (None, "other")],
 )  # fmt: skip
 async def test_stop_reason_mapping(sdk_stop, expected):
     client = stub_client(sdk_message([], stop_reason=sdk_stop))
@@ -188,6 +188,7 @@ def status_error(cls, status: int):
         (status_error(anthropic.AuthenticationError, 401), False),
         (status_error(anthropic.NotFoundError, 404), False),
         (status_error(anthropic.BadRequestError, 400), False),
+        (anthropic.AnthropicError("client misconfigured"), False),
     ],
 )
 async def test_sdk_errors_become_llm_errors(error, retryable):
@@ -210,6 +211,40 @@ async def test_describe_model_unknown_model_is_not_retryable():
     with pytest.raises(LLMError, match="not available") as exc_info:
         await provider(client).describe_model()
     assert exc_info.value.retryable is False
+
+
+async def test_describe_model_transient_error_is_retryable():
+    client = stub_client(error=anthropic.APIConnectionError(request=REQUEST))
+    with pytest.raises(LLMError, match="^APIConnectionError: ") as exc_info:
+        await provider(client).describe_model()
+    assert exc_info.value.retryable is True
+
+
+async def test_empty_text_parts_are_not_sent():
+    client = stub_client(sdk_message([{"type": "text", "text": "ok"}]))
+    history = (Message("user", (TextPart(""), ToolResult("tu_1", '{"ok": true}'))),)
+
+    await provider(client).generate(system="S", messages=history)
+
+    assert client.beta.messages.calls[0]["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": '{"ok": true}'}],
+        }
+    ]
+
+
+def test_default_client_uses_configured_key_timeout_and_retries():
+    llm = AnthropicLLMProvider(
+        model="claude-opus-5", api_key="sk-ant-test", timeout_seconds=5, max_retries=0
+    )
+    client = llm._client
+    assert (type(client), client.api_key, client.timeout, client.max_retries) == (
+        anthropic.AsyncAnthropic,
+        "sk-ant-test",
+        5,
+        0,
+    )
 
 
 # --- live: real Anthropic API, opt in with `uv run pytest -m live` -----------------------------
