@@ -42,6 +42,12 @@ The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System
 
 `grep` in this shell is ugrep, which rejects long bounded regexes. Use `command grep` or Python for those.
 
+At the end of a substantial working session (or whenever you want the signal pulled out of a
+long conversation rather than a chronological recap), invoke the `session-extract` skill. It
+writes a two-pass extraction to `~/.claude/session-extractions/transaction-agent/` — outside
+this repo, so it never collides with another concurrent session's git activity the way an
+in-repo extraction file did once already.
+
 Tests use an in-memory SQLite engine (`tests/conftest.py`). Use `TestClient(create_app())` without a `with` block so the lifespan doesn't create the real `transaction_agent.db`. Fake phone numbers in tests use the `+2541…` range, because #9's pre-publish secret check greps for `+2547…`.
 
 ## What this is
