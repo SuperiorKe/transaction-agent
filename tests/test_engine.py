@@ -105,7 +105,9 @@ async def test_tool_exception_becomes_error_result_not_crash():
 
     assert turn.say == "Sorry."
     result = llm.requests[1].messages[-1].parts[0]
-    assert result.is_error and "database is locked" in result.content
+    assert result.is_error
+    # The exception detail stays in the log; the model (and so the caller) never sees it.
+    assert result.content == "Tool record_offer failed."
 
 
 async def test_retryable_llm_error_asks_caller_to_repeat():

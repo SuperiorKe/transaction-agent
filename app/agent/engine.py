@@ -82,11 +82,11 @@ class NegotiationEngine:
             except LLMError as exc:
                 log.warning("LLM call failed (retryable=%s): %s", exc.retryable, exc)
                 if exc.retryable:
-                    return AgentTurn(REPEAT_PLEASE, end_call=end_call, note="llm_error_retryable")
-                return AgentTurn(FORCED_GOODBYE, end_call=True, note="llm_error")
+                    return self._say(REPEAT_PLEASE, end_call=end_call, note="llm_error_retryable")
+                return self._say(FORCED_GOODBYE, end_call=True, note="llm_error")
 
             if response.stop_reason == "refusal":
-                return AgentTurn(FORCED_GOODBYE, end_call=True, note="refusal")
+                return self._say(FORCED_GOODBYE, end_call=True, note="refusal")
 
             self._history.append(Message("assistant", response.parts, response.provider_payload))
             if not response.tool_calls:
@@ -101,11 +101,18 @@ class NegotiationEngine:
             self._history.append(Message("user", tuple(results)))
 
         log.warning("tool round limit (%d) reached", self._max_tool_rounds)
-        return AgentTurn(REPEAT_PLEASE, end_call=end_call, note="tool_round_limit")
+        return self._say(REPEAT_PLEASE, end_call=end_call, note="tool_round_limit")
+
+    def _say(self, text: str, *, end_call: bool, note: str) -> AgentTurn:
+        """Return a turn AND record it as an assistant message, so history stays consistent
+        with what was actually spoken even on error/refusal/round-limit paths."""
+        self._history.append(Message("assistant", (TextPart(text),)))
+        return AgentTurn(text, end_call=end_call, note=note)
 
     async def _execute(self, call: ToolCall) -> ToolOutcome:
         try:
             return await self._tools.execute(call)
-        except Exception as exc:  # a broken tool must not crash a live call
+        except Exception:  # a broken tool must not crash a live call
             log.exception("tool %s failed", call.name)
-            return ToolOutcome(f"Tool {call.name} failed: {exc}", is_error=True)
+            # Details stay in the server log: tool results reach the model, which may speak them.
+            return ToolOutcome(f"Tool {call.name} failed.", is_error=True)

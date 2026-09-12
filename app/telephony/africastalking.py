@@ -41,7 +41,10 @@ log = logging.getLogger(__name__)
 VOICE_CALL_URL = "https://voice.africastalking.com/call"
 XML_MEDIA_TYPE = "application/xml"
 XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>'
-DEFAULT_RECORDING_HOSTS = ("africastalking.com", "at-internal.com")
+# Single source of truth is Settings.at_recording_hosts; .env.example documents the same value.
+DEFAULT_RECORDING_HOSTS: tuple[str, ...] = tuple(
+    h.strip() for h in Settings.model_fields["at_recording_hosts"].default.split(",")
+)
 MAX_RECORDING_BYTES = 5_000_000
 GOODBYE = "Goodbye."
 
@@ -49,7 +52,7 @@ GOODBYE = "Goodbye."
 def _int_or_none(value: str | None) -> int | None:
     try:
         return int(float(value)) if value not in (None, "") else None
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
 
 

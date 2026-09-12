@@ -130,6 +130,44 @@ async def test_ended_for_unknown_session_is_acknowledged(setup):
     assert await coordinator.handle_callback(ended("ghost")) == telephony.acknowledge()
 
 
+async def test_replayed_event_after_call_ended_does_not_start_a_new_negotiation(setup):
+    # Providers redeliver on a slow/failed response. A stray event for a call that already
+    # ended must not silently spin up a brand-new agent for it.
+    coordinator, telephony, agents = setup
+    await coordinator.handle_callback(answered("s1"))
+    await coordinator.handle_callback(ended("s1"))
+
+    result = await coordinator.handle_callback(said("s1", "yes I accept 50000"))
+
+    assert result == telephony.acknowledge()
+    assert agents["s1"].started == 1
+    assert agents["s1"].heard == []  # the replay never reached the (already-finished) agent
+    assert coordinator.active_sessions == frozenset()
+
+
+async def test_agent_exception_during_turn_does_not_leak_the_session(setup):
+    coordinator, _, agents = setup
+
+    class BoomAgent:
+        async def start(self):
+            raise RuntimeError("boom")
+
+        async def respond(self, message):
+            raise RuntimeError("boom")
+
+        async def finish(self, reason):
+            pass
+
+    coordinator._agent_factory = lambda _sid: BoomAgent()  # noqa: SLF001 - test-only override
+
+    with pytest.raises(RuntimeError):
+        await coordinator.handle_callback(answered("s1"))
+
+    # A crashed turn must not leave a dead session registered, or a provider retry for the
+    # same call gets silently misrouted into the caller-silent branch forever.
+    assert coordinator.active_sessions == frozenset()
+
+
 async def test_speech_before_answered_event_still_reaches_a_new_agent(setup):
     coordinator, _, agents = setup
 
@@ -221,3 +259,53 @@ def test_webhook_rejects_everything_when_secret_unconfigured(setup):
     app.include_router(build_voice_router(coordinator, webhook_secret=""))
     response = TestClient(app).post("/webhooks/voice/", data={"event": "answered"})
     assert response.status_code == 404
+
+
+def test_webhook_non_ascii_secret_guess_is_404_not_500(webhook_client):
+    # hmac.compare_digest raises TypeError on non-ASCII str; the route compares bytes.
+    response = webhook_client.post("/webhooks/voice/sécret", data={"event": "answered"})
+    assert response.status_code == 404
+
+
+def test_webhook_unexpected_exception_ends_call_gracefully_not_500(setup):
+    coordinator, telephony, _ = setup
+
+    class BoomAgent:
+        async def start(self):
+            raise RuntimeError("boom")
+
+        async def respond(self, message):
+            raise RuntimeError("boom")
+
+        async def finish(self, reason):
+            pass
+
+    coordinator._agent_factory = lambda _sid: BoomAgent()  # noqa: SLF001 - test-only override
+    app = FastAPI()
+    app.include_router(build_voice_router(coordinator, webhook_secret="s3cret"))
+    client = TestClient(app)
+
+    response = client.post("/webhooks/voice/s3cret", data={"event": "answered", "session_id": "s1"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["end_call"] is True
+    assert "boom" not in body["say"]  # internal exception text never reaches the caller
+    assert coordinator.active_sessions == frozenset()  # the crashed session was still evicted
+
+
+def test_webhook_undecodable_body_is_400_not_500(webhook_client):
+    response = webhook_client.post(
+        "/webhooks/voice/s3cret",
+        content=b"\xff\xfe",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    assert response.status_code == 400
+
+
+def test_webhook_callback_the_provider_cannot_parse_is_400(webhook_client):
+    response = webhook_client.post("/webhooks/voice/s3cret", data={"event": "bogus"})
+    assert response.status_code == 400
+    # Parser internals stay server-side; whoever holds the webhook secret doesn't need them.
+    assert response.json()["detail"] == "invalid callback"
+    assert "bogus" not in response.text

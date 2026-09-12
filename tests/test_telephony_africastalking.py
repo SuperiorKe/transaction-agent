@@ -7,13 +7,18 @@ from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from app.calls import DIDNT_CATCH, CallCoordinator
 from app.config import Settings
 from app.conversation import AgentTurn, CallerMessage
+from app.middleware import LocalOnlyOwnerRoutes
+from app.routes.voice import build_voice_router
 from app.speech.base import SpeechToTextError
 from app.speech.fake import FakeSpeechToText
 from app.telephony.africastalking import (
+    DEFAULT_RECORDING_HOSTS,
     VOICE_CALL_URL,
     XML_DECLARATION,
     AfricasTalkingVoiceProvider,
@@ -335,3 +340,170 @@ async def test_africas_talking_call_flow_through_coordinator():
     assert "<Record" not in answer.body
     assert done == provider.acknowledge()
     assert agent.finished == ["NORMAL_CLEARING"]
+
+
+def test_africas_talking_posts_through_the_voice_webhook_route():
+    provider, _, _ = make()
+    agent = EchoAgent()
+    app = FastAPI()
+    app.add_middleware(LocalOnlyOwnerRoutes)
+    app.include_router(build_voice_router(CallCoordinator(provider, lambda _sid: agent), "s3cret"))
+    client = TestClient(app)
+    tunnel = {"cf-connecting-ip": "203.0.113.7"}
+
+    greeting = client.post("/webhooks/voice/s3cret", data=form(dtmfDigits=""), headers=tunnel)
+    done = client.post(
+        "/webhooks/voice/s3cret",
+        data=form(isActive="0", hangupCause="NORMAL_CLEARING"),
+        headers=tunnel,
+    )
+
+    assert (greeting.status_code, greeting.headers["content-type"]) == (200, "application/xml")
+    assert (
+        greeting.text
+        == provider.render(
+            AgentTurn("Hi, I'm an AI assistant calling for a client. Are you free Monday?")
+        ).body
+    )
+    assert (done.status_code, done.text) == (200, provider.acknowledge().body)
+    assert agent.finished == ["NORMAL_CLEARING"]
+
+
+# --- edge and error paths ----------------------------------------------------------------------
+
+
+async def test_final_notification_with_recording_is_not_downloaded():
+    provider, http, stt = make()
+
+    event = await provider.parse_callback(
+        form(isActive="0", hangupCause="NORMAL_CLEARING", recordingUrl=RECORDING)
+    )
+
+    assert event == CallEnded("ATVId_1", "NORMAL_CLEARING", None)
+    assert http.requests == []
+    assert stt.received == []
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    [
+        ("47", 47),
+        ("47.6", 47),
+        ("", None),
+        ("unknown", None),
+        # Regression: int(float("1e400")) raises OverflowError, not ValueError (ship review,
+        # arch/africastalking-anthropic) -- a malformed callback must not 500 instead of
+        # ending up as a normal CallEnded with no known duration.
+        ("1e400", None),
+        ("-1e400", None),
+    ],
+)
+async def test_final_notification_duration_parsing(duration, expected):
+    provider, _, _ = make()
+    event = await provider.parse_callback(form(isActive="0", durationInSeconds=duration))
+    assert event == CallEnded("ATVId_1", None, expected)
+
+
+def test_default_recording_hosts_matches_settings_so_they_cannot_drift():
+    assert DEFAULT_RECORDING_HOSTS == tuple(Settings().at_recording_hosts.split(","))
+
+
+def mock_client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+async def test_recording_redirect_to_another_host_is_not_followed():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(302, headers={"location": "http://127.0.0.1:8000/transactions"})
+
+    provider, _, stt = make(http_client=mock_client(handler))
+
+    assert await provider.parse_callback(form(recordingUrl=RECORDING)) == CallerSilent("ATVId_1")
+    assert [str(request.url) for request in requests] == [RECORDING]
+    assert stt.received == []
+
+
+async def test_empty_recording_is_silence_without_transcribing():
+    provider, _, stt = make(Http(audio=b""))
+    assert await provider.parse_callback(form(recordingUrl=RECORDING)) == CallerSilent("ATVId_1")
+    assert stt.received == []
+
+
+@pytest.mark.parametrize(
+    ("headers", "content_type"),
+    [({"content-type": "audio/wav; codecs=1"}, "audio/wav"), ({}, "audio/mpeg")],
+)
+async def test_recording_content_type_reaches_speech_to_text(headers, content_type):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"RIFF-fake-wav", headers=headers)
+
+    provider, _, stt = make(http_client=mock_client(handler))
+
+    await provider.parse_callback(form(recordingUrl=RECORDING))
+
+    assert stt.received == [(b"RIFF-fake-wav", content_type)]
+
+
+def connect_error(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+def json_list(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=["unexpected"])
+
+
+@pytest.mark.parametrize(
+    ("handler", "message"),
+    [
+        (connect_error, "call request failed: connection refused"),
+        (json_list, r"did not queue the call: None \(None\)"),
+    ],
+)
+async def test_place_call_transport_and_payload_errors_raise_telephony_error(handler, message):
+    provider, _, _ = make(http_client=mock_client(handler))
+    with pytest.raises(TelephonyError, match=message):
+        await provider.place_call(PROVIDER_PHONE)
+
+
+async def test_aclose_closes_only_a_client_the_provider_created():
+    injected = mock_client(Http().handler)
+    borrowed, _, _ = make(http_client=injected)
+    owned = AfricasTalkingVoiceProvider(
+        username="atuser", api_key="k", from_number=FROM_NUMBER, speech_to_text=FakeSpeechToText()
+    )
+
+    await borrowed.aclose()
+    await owned.aclose()
+
+    assert (injected.is_closed, owned._http.is_closed) == (False, True)
+    await injected.aclose()
+
+
+async def test_factory_applies_operator_record_voice_and_host_settings():
+    settings = Settings(
+        _env_file=None,
+        at_tts_voice="en-GB-Standard-A",
+        at_record_max_seconds=20,
+        at_record_silence_timeout_seconds=5,
+        at_recording_hosts=" at-internal.com , ",
+    )
+    http = Http()
+    provider = build_africastalking_provider(
+        settings, FakeSpeechToText("Yes."), http_client=http.client()
+    )
+    internal = "https://media.at-internal.com/r.mp3"
+
+    body = provider.render(AgentTurn("Hello")).body
+    refused = await provider.parse_callback(form(recordingUrl=RECORDING))
+    fetched = await provider.parse_callback(form(recordingUrl=internal))
+
+    assert body == (
+        XML_DECLARATION + '<Response><Record finishOnKey="#" maxLength="20" timeout="5" '
+        'trimSilence="true" playBeep="false"><Say voice="en-GB-Standard-A">Hello</Say>'
+        "</Record></Response>"
+    )
+    assert (refused, fetched) == (CallerSilent("ATVId_1"), CallerSpoke("ATVId_1", "Yes."))
+    assert [str(request.url) for request in http.requests] == [internal]

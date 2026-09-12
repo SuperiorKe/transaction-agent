@@ -5,6 +5,7 @@ Provider-agnostic: it sees CallEvents and AgentTurns only.
 
 import asyncio
 import logging
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -22,6 +23,9 @@ log = logging.getLogger(__name__)
 
 DIDNT_CATCH = "Sorry, I didn't catch that. Could you say it again?"
 SILENCE_GOODBYE = "I can't hear you, so I'll end the call now. Goodbye."
+UNEXPECTED_ERROR_GOODBYE = (
+    "Sorry, something went wrong on my end. I'll pass this to my client. Goodbye."
+)
 
 AgentFactory = Callable[[str], ConversationAgent]  # session_id -> agent for that call
 
@@ -40,15 +44,32 @@ class CallCoordinator:
         agent_factory: AgentFactory,
         *,
         max_silent_turns: int = 2,
+        max_ended_sessions_remembered: int = 1000,
     ) -> None:
         self._telephony = telephony
         self._agent_factory = agent_factory
         self._max_silent_turns = max_silent_turns
         self._sessions: dict[str, _Session] = {}
+        # Bounded LRU of session ids whose call has already ended, so a duplicate/replayed
+        # webhook for it (providers redeliver on a slow or failed response) is ignored instead
+        # of silently starting a brand-new negotiation for a call that no longer exists.
+        self._ended_sessions: OrderedDict[str, None] = OrderedDict()
+        self._max_ended_sessions = max_ended_sessions_remembered
 
     @property
     def active_sessions(self) -> frozenset[str]:
         return frozenset(self._sessions)
+
+    def render_end_call(self, message: str = UNEXPECTED_ERROR_GOODBYE) -> ProviderReply:
+        """A provider-appropriate reply that ends the call, for callers (e.g. the voice route)
+        that hit an error handle_callback itself can't recover from."""
+        return self._telephony.render(AgentTurn(message, end_call=True))
+
+    def _tombstone(self, session_id: str) -> None:
+        self._ended_sessions[session_id] = None
+        self._ended_sessions.move_to_end(session_id)
+        if len(self._ended_sessions) > self._max_ended_sessions:
+            self._ended_sessions.popitem(last=False)
 
     async def handle_callback(self, form: Mapping[str, str]) -> ProviderReply:
         event = await self._telephony.parse_callback(form)
@@ -56,7 +77,17 @@ class CallCoordinator:
         if isinstance(event, CallEnded):
             session = self._sessions.pop(event.session_id, None)
             if session is not None:
-                await session.agent.finish(event.reason)
+                # Serialize with any turn still in flight for this session: a hang-up callback
+                # can otherwise land while a slow LLM/tool round is still running.
+                async with session.lock:
+                    await session.agent.finish(event.reason)
+            self._tombstone(event.session_id)
+            return self._telephony.acknowledge()
+
+        if event.session_id in self._ended_sessions:
+            log.info(
+                "ignoring %s for already-ended session %s", type(event).__name__, event.session_id
+            )
             return self._telephony.acknowledge()
 
         session = self._sessions.get(event.session_id)
@@ -65,8 +96,14 @@ class CallCoordinator:
             session = _Session(agent=self._agent_factory(event.session_id))
             self._sessions[event.session_id] = session
 
-        async with session.lock:
-            turn = await self._next_turn(session, event, is_new)
+        try:
+            async with session.lock:
+                turn = await self._next_turn(session, event, is_new)
+        except Exception:
+            # A crashed turn must not leave a dead session registered: without this, a retry
+            # for the same call is misrouted into the caller-silent branch forever.
+            self._sessions.pop(event.session_id, None)
+            raise
         return self._telephony.render(turn)
 
     async def _next_turn(
