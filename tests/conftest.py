@@ -17,6 +17,11 @@ def engine() -> Iterator[Engine]:
 
 
 @pytest.fixture
-def session(engine: Engine) -> Iterator[Session]:
-    with sessionmaker(bind=engine, expire_on_commit=False)() as s:
+def session_factory(engine: Engine):
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@pytest.fixture
+def session(session_factory) -> Iterator[Session]:
+    with session_factory() as s:
         yield s

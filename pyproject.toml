@@ -39,3 +39,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's DI pattern: Depends(...)/Query(...)/Path(...) defaults are meant to be called at
+# import time, not per-request -- the opposite of the mutable-default footgun B008 guards against.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]

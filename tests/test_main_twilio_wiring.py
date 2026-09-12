@@ -31,7 +31,10 @@ def _in_memory_session_factory():
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def test_an_unknown_call_falls_back_to_the_preflight_stub():
+def test_an_unknown_call_gets_a_polite_rejection_and_hangs_up():
+    """No Negotiation.provider_call_id matches: #6's orchestrator rejects and hangs up rather
+    than falling back to a preflight smoke-test stub (that stand-in was PR #15's, since
+    replaced by the real Negotiation lookup in app/orchestrator.py)."""
     client = TestClient(create_app(_settings(), session_factory=_in_memory_session_factory()))
 
     response = client.post(
@@ -48,8 +51,8 @@ def test_an_unknown_call_falls_back_to_the_preflight_stub():
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/xml")
-    assert "<Gather" in response.text
-    assert "This is a brief phone connection test." in response.text
+    assert "<Gather" not in response.text
+    assert "doesn't take incoming calls" in response.text
 
 
 def test_twilio_webhook_refuses_an_incorrect_secret():
