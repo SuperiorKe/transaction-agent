@@ -1,246 +1,774 @@
 # Transaction Agent
 
-An AI agent that **places a real phone call on your behalf, negotiates within limits you set,
-and asks before it commits you to anything.**
+An AI procurement agent that **negotiates with suppliers on behalf of businesses — by phone — while staying within purchasing rules set by the business.**
 
-Built for the AI Tinkerers Nairobi "Agents, Everywhere" hackathon (12 Sept 2026) as a four-hour
-vertical slice. Demo case: booking a photographer in Nairobi.
+Transaction Agent turns a business's purchasing mandate into a bounded AI agent:
+
+> "We need 500kg of produce this week. Maximum KES 80,000. Stay within budget, negotiate up to three times, and don't commit without approval."
+
+The agent contacts a supplier, conducts the conversation, evaluates every offer against the purchasing policy, and returns the best compliant outcome for a human to approve or decline.
+
+**The agent negotiates. The business stays in control.**
+
+Built for the AI Tinkerers Nairobi **"Agents, Everywhere"** hackathon (12 Sept 2026) as a focused vertical slice.
+
+---
+
+## The problem
+
+Many businesses in Kenya still negotiate with suppliers through **phone calls and WhatsApp**, not APIs or procurement portals.
+
+A procurement officer may repeatedly have to:
+
+* call suppliers for prices;
+* negotiate discounts;
+* clarify quantities and terms;
+* compare counteroffers;
+* make sure the agreed price stays within an approved budget;
+* document what was agreed.
+
+Traditional procurement software is good at managing structured workflows.
+
+It is much less useful when the supplier's interface is simply:
+
+**a person answering a phone.**
+
+Transaction Agent is designed for that layer.
+
+---
 
 ## What it does
 
-You give the agent an objective and bounded authority — not a blank check:
+You give the agent an objective and a bounded purchasing mandate — **not a blank cheque**.
 
-> "Photographer for Monday in Nairobi. Max KES 20,000. Negotiate twice; never agree above
-> KES 20,000 without my approval."
+For example:
+
+> "Photographer for Monday in Nairobi. Maximum KES 20,000. Negotiate twice. Never agree above KES 20,000 without my approval."
 
 The agent then:
 
-1. Picks a seeded provider and **places a real outbound voice call** (Africa's Talking).
-2. Has a turn-based spoken conversation: it records the provider's reply, transcribes it
-   (Google Speech-to-Text), reasons about it (Claude), and speaks back.
-3. Negotiates the price using a small, fixed set of tools — it can propose a counteroffer or ask
-   a clarifying question, but it cannot invent numbers or agree to anything itself.
-4. Stops at the line you drew. If the provider won't come down to your budget, asks for a
-   deposit, or brings up terms outside its authority, the agent **does not agree** — it ends the
-   call and returns a recommendation for you to approve or decline.
-5. Writes every decision to an audit trail, so you can see exactly why it did what it did.
+1. **Selects a known supplier** from the business's supplier list.
+2. **Places a real outbound phone call** using Twilio.
+3. Handles the supplier's spoken response through the voice pipeline.
+4. Uses an LLM to conduct the natural-language conversation.
+5. Evaluates offers against deterministic purchasing rules.
+6. Makes a counteroffer or asks for clarification when permitted.
+7. **Stops when the business's authority boundary is reached.**
+8. Returns the resulting offer and recommendation to the business.
+9. Records the decisions and state changes in an audit trail.
 
-The core idea the whole build enforces: **the LLM handles language, deterministic code enforces
-authority.** The budget cap, the attempt limit, and every accept/escalate/stop decision are
-computed in plain Python (`app/policy.py`), not decided by a prompt. The model never gets a tool
-that lets it confirm a booking, ask for a deposit, or speak a price it wasn't given.
+The critical design principle is:
+
+> **The LLM handles language. Deterministic code enforces authority.**
+
+The model does not decide whether an offer is acceptable simply because a prompt tells it to.
+
+The budget cap, negotiation attempt limit, required terms, escalation behaviour, and accept/counter/stop decisions are evaluated in Python (`app/policy.py`).
+
+---
+
+## Why voice?
+
+Transaction Agent is deliberately built around **voice as a supplier interface**.
+
+In our target market, a supplier does not need to expose an API, integrate with a procurement platform, or install another application.
+
+They can simply answer the phone.
+
+That means the business can keep its existing supplier relationships while delegating the repetitive negotiation layer to an agent.
+
+This is particularly relevant for recurring local procurement such as:
+
+* hospitality and produce;
+* laundry services;
+* transport and logistics;
+* catering;
+* construction haulage;
+* plant hire;
+* events and media services;
+* other locally negotiated supplier services.
+
+---
 
 ## Who this is for
 
-- **Hackathon judges / other builders** evaluating the submission — see [Current status](#current-status)
-  for exactly what's real right now vs. still being wired up live at the event.
-- **Me, later** — this README plus `CLAUDE.md` (repo conventions, spec pointers, build order) is
-  the fast way back into this project after time away.
-- **Anyone extending it** to a different service category or negotiation policy — the
-  provider/policy/orchestration layers are meant to be swappable.
+Transaction Agent is being developed for **Kenyan SMEs and mid-market businesses that repeatedly negotiate with local suppliers.**
 
-This is a hackathon prototype, not a product. It does not do payments, provider discovery, or
-support more than one service category — see [Scope](#scope--limitations).
+The initial product thesis focuses on businesses where:
+
+* supplier relationships already exist;
+* purchasing happens repeatedly;
+* prices or terms are negotiated frequently;
+* suppliers primarily communicate through phone or messaging;
+* employees spend meaningful time handling repetitive negotiations;
+* purchases have clear approval limits.
+
+### Initial wedge
+
+The first target category is **recurring hospitality procurement**, particularly produce.
+
+The reasoning is simple:
+
+* purchases happen frequently;
+* prices can change;
+* supplier relationships already exist;
+* negotiations are relatively understandable;
+* the financial risk of an individual failed negotiation is manageable;
+* successful negotiations can produce measurable savings.
+
+Other categories can be added later.
+
+---
+
+## The business model
+
+Transaction Agent is a **B2B SaaS product**.
+
+The **business buying the software pays for it**.
+
+Suppliers do not pay to influence negotiations.
+
+The product is intended to use a subscription model with an included allowance of negotiations and metered usage beyond that allowance.
+
+The commercial unit is **the negotiation**, rather than raw call minutes, because businesses can understand and budget for negotiations more easily than telecommunications usage.
+
+Pricing and unit economics are still being validated.
+
+---
+
+## Why the business pays
+
+The product is intended to create value in three places:
+
+### 1. Money saved
+
+The agent can negotiate within the purchasing mandate rather than simply accepting the supplier's first quote.
+
+### 2. Employee time saved
+
+Procurement and operations staff can delegate repetitive supplier conversations while retaining approval authority.
+
+### 3. Purchasing control
+
+Every negotiation is constrained by explicit rules and recorded in an audit trail.
+
+The goal is not to replace procurement teams.
+
+It is to give them an **automated negotiation layer**.
+
+---
+
+## Human approval is the transaction boundary
+
+Transaction Agent does not treat successful negotiation as automatic authorization to purchase.
+
+The agent can negotiate within its delegated authority, but the business remains responsible for the final commitment.
+
+Conceptually:
+
+```text
+Business
+   │
+   │ purchasing mandate
+   ▼
+Transaction Agent
+   │
+   │ phone negotiation
+   ▼
+Supplier
+   │
+   │ offers / counteroffers
+   ▼
+Policy Engine
+   │
+   ├── within authority → continue
+   ├── counter allowed → negotiate
+   ├── outside authority → stop / escalate
+   └── acceptable outcome → recommendation
+                              │
+                              ▼
+                       Human approval
+                              │
+                         approve / decline
+```
+
+This distinction is fundamental to the architecture.
+
+**Negotiation can be delegated. Final purchasing authority does not have to be.**
+
+---
+
+## Deterministic policy enforcement
+
+The core safety mechanism is deliberately outside the LLM.
+
+For example, a business may define:
+
+* maximum budget;
+* maximum negotiation attempts;
+* required quantity;
+* required service terms;
+* escalation conditions;
+* whether final acceptance requires approval.
+
+The LLM can propose an action.
+
+The policy engine decides whether that action is actually allowed.
+
+```text
+LLM proposes:
+
+"Accept KES 85,000"
+
+        ↓
+
+Policy engine:
+
+Maximum = KES 80,000
+
+        ↓
+
+REJECTED
+```
+
+The model cannot override the result by changing its wording.
+
+This is the central technical principle of Transaction Agent:
+
+> **Natural language is handled by the model. Authority is enforced by code.**
+
+---
+
+## Auditability
+
+Every important transaction decision is recorded.
+
+The data model includes:
+
+* `providers`
+* `transactions`
+* `negotiations`
+* `offers`
+* `recommendations`
+* `approvals`
+* `audit_events`
+
+For a business, the audit trail is more than debugging information.
+
+It provides a record of:
+
+* what authority was delegated;
+* what the supplier offered;
+* what the agent proposed;
+* why an offer was accepted or rejected;
+* when the agent stopped;
+* whether human approval was required.
+
+This is important because **delegating purchasing conversations to software requires evidence that the software respected the mandate.**
+
+---
 
 ## Current status
 
-This is being finished live at the event, so treat this section as the source of truth over any
-stale claim elsewhere.
+This is a hackathon prototype being developed as a focused vertical slice.
 
-**Working today, offline-tested:**
-- Deterministic policy engine: accept/counter/clarify/escalate/stop decisions, counteroffer math,
-  and the final recommendation text (`app/policy.py`).
-- Transaction/negotiation state machine with enforced legal transitions (`app/states.py`).
-- Real outbound calling through Africa's Talking Voice, behind a `TelephonyProvider` interface
-  (`app/telephony/africastalking.py`), with a webhook-protected turn loop
-  (`app/routes/voice.py`, `app/calls.py`).
-- Speech-to-text via Google Cloud Speech-to-Text v2 (`app/speech/google.py`).
-- The negotiation conversation itself, running on the Anthropic Messages API through a narrow
-  tool surface (`app/agent/`, `app/conversation.py`).
-- A full offline test suite (`uv run pytest`) using fakes for all three vendors — no phone
-  number, AT credentials, or API key needed to run it.
-- Data model and audit trail (`app/models.py`, `app/audit.py`).
+### Working today, offline-tested
 
-**Not built yet — today's remaining work:**
-- The `POST /transactions` REST API that creates a transaction, kicks off a call, and exposes
-  `approve`/`decline` (issue #6). Right now the negotiation path is reachable via the voice
-  webhook and the call coordinator, but nothing yet persists a `Transaction` row or drives the
-  full state machine end to end from an HTTP request.
-- The owner UI (`web/`) — a minimal screen to create a transaction and approve/decline the
-  result. `app/main.py` already serves `web/dist` if it exists; it doesn't yet.
-- Wiring `CALL_HARD_END_SECONDS` as an actual circuit breaker on call length (tracked in
-  `TODOS.md`).
+* Deterministic policy engine: accept/counter/clarify/escalate/stop decisions, counteroffer math, and recommendation generation (`app/policy.py`).
+* Transaction/negotiation state machine with enforced legal transitions (`app/states.py`).
+* Real outbound calling through **Twilio Voice** behind a `TelephonyProvider` interface.
+* Voice webhook and turn-based call coordination (`app/routes/voice.py`, `app/calls.py`).
+* Voice/speech processing through the current Twilio-based voice pipeline.
+* Negotiation conversation through the Anthropic Messages API with a deliberately narrow tool surface (`app/agent/`, `app/conversation.py`).
+* Offline test suite using fakes for external vendors.
+* SQLAlchemy data model and append-only audit trail.
 
-Check `TODOS.md` and the issues on the private planning repo
-(`SuperiorKe/transaction-agent`, epic #10 + issues #1–#9) for the exact remaining list.
+### Operational safeguards
+
+The prototype also defines operational limits for live calling:
+
+* `MAX_CALLS_PER_DAY` limits daily call volume.
+* `CALL_HARD_END_SECONDS` provides a hard upper bound on call duration.
+
+The current configuration uses a **180-second hard call ceiling**, which puts a concrete upper bound on the telephony exposure of a single negotiation.
+
+### Still being wired
+
+* `POST /transactions` REST API for creating transactions and exposing approval/decline actions.
+* Owner UI (`web/`) for creating transactions and reviewing outcomes.
+* Full end-to-end persistence and orchestration from transaction creation through negotiation and approval.
+
+Check `TODOS.md` and the GitHub issues for the exact remaining implementation work.
+
+---
 
 ## Architecture
 
-```
-Owner UI  →  FastAPI  →  agent orchestrator + policy engine  →  telephony (turn-based)
-  (React)     (app/)      (app/agent, app/policy.py)             recording → speech-to-text
-                                                                  → LLM → text-to-speech
-                                                                  → provider
-                                                     ↓
-                                        outcome evaluator → user approval → confirmation
-```
-
-| Layer | Choice | Why |
-|---|---|---|
-| Backend | FastAPI, Python 3.12, SQLAlchemy 2 | one process, easy to demo |
-| State | SQLite, tables created on startup, no migrations | delete the DB file after a schema change |
-| Telephony | Africa's Talking Voice, behind `TelephonyProvider` | turn-based `<Record>`/`<Say>` XML over a webhook; AT's sandbox doesn't work, so a real call needs a live/test number |
-| Speech-to-text | Google Cloud Speech-to-Text v2 (`chirp_3`, `eu`) | AT has no built-in recognition; `en-KE` isn't supported by v2 so `en-GB` is the default |
-| Reasoning | Anthropic Messages API, behind `LLMProvider` | model set by `ANTHROPIC_MODEL` |
-| UI | Vite + React + TS in `web/`, built to `web/dist`, served by FastAPI | not built yet |
-| Workflow | Plain asyncio tasks | no queue/worker infra for a 4-hour build |
-
-**Vendor isolation is enforced by a test, not just convention** (`tests/test_architecture.py`):
-`app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py`, and `app/numbers.py` may
-never import a telephony SDK or a model SDK directly. All vendor code lives in exactly three
-files: `app/telephony/africastalking.py`, `app/speech/google.py`, `app/llm/anthropic.py`. Every
-offline test runs against `FakeTelephonyProvider`, `ScriptedLLMProvider`, and `FakeSpeechToText`
-instead.
-
-**Tool surface given to the model** (narrow, on purpose): `find_provider`,
-`get_transaction_policy`, `start_call`, `record_offer`, `request_user_approval`,
-`confirm_booking`, `end_call`. It never gets raw DB or HTTP access. Every accept/escalate/stop
-decision is recomputed in `app/policy.py` after the model proposes an action — a disallowed
-action is rejected in code even if the model asks for it.
-
-**Hard agent rules** (enforced, not just prompted): identify as an AI when asked · never invent a
-price, availability, or agreement · never claim a confirmation before one exists · never guess an
-unclear spoken number, ask again instead · a changed price is always a new offer, re-evaluated
-from scratch.
-
-### Data model
-
-`providers`, `transactions`, `negotiations`, `offers`, `recommendations`, `approvals`,
-`audit_events` — see `app/models.py`. Providers are seeded from `.env`; there's no discovery.
-
-### State machine
-
-```
-CREATED → PROVIDER_SELECTED → CALLING → NEGOTIATING
-NEGOTIATING → AGREED_WITHIN_POLICY   → RESULT_READY
-NEGOTIATING → OUTSIDE_AUTHORITY      → AWAITING_APPROVAL
-NEGOTIATING → UNAVAILABLE            → NEXT_PROVIDER | FAILED
-RESULT_READY / AWAITING_APPROVAL → APPROVED → CONFIRMING → CONFIRMED
-RESULT_READY / AWAITING_APPROVAL → DECLINED → CLOSED
+```text
+Business / Owner UI
+        │
+        ▼
+     FastAPI
+        │
+        ▼
+Transaction Orchestrator
+        │
+        ├──────────────► Policy Engine
+        │                 app/policy.py
+        │
+        ▼
+ Negotiation Agent
+        │
+        ▼
+   Twilio Voice
+        │
+        ▼
+     Supplier
+        │
+        │ spoken response
+        ▼
+   Voice Pipeline
+        │
+        ▼
+      LLM
+   Anthropic
+        │
+        ▼
+ Policy Evaluation
+        │
+        ├── continue negotiating
+        ├── counter
+        ├── clarify
+        ├── escalate
+        └── stop
+        │
+        ▼
+ Recommendation
+        │
+        ▼
+ Human Approval
 ```
 
-Every transition is checked against an explicit allow-list (`app/states.py::ALLOWED_TRANSITIONS`)
-and written to `audit_events`; anything not on the list raises instead of silently happening.
+### Technology
+
+| Layer                 | Choice                         | Purpose                                     |
+| --------------------- | ------------------------------ | ------------------------------------------- |
+| Backend               | FastAPI + Python 3.12          | Application/API layer                       |
+| State                 | SQLite + SQLAlchemy 2          | Transaction and audit persistence           |
+| Telephony             | **Twilio Voice**               | Real phone calls                            |
+| Speech/voice pipeline | **Current Twilio voice stack** | Handle the live voice interaction           |
+| Reasoning             | Anthropic Messages API         | Natural-language negotiation                |
+| UI                    | Vite + React + TypeScript      | Owner interface                             |
+| Workflow              | Python asyncio                 | Lightweight orchestration for the hackathon |
+
+---
+
+## Vendor isolation
+
+External vendors are isolated behind interfaces.
+
+`app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py`, and `app/numbers.py` do not import telephony or model SDKs directly.
+
+Vendor-specific integrations are kept behind their respective adapters.
+
+The telephony integration is:
+
+```text
+app/telephony/
+```
+
+and the Twilio implementation sits behind the `TelephonyProvider` interface.
+
+Offline tests use fake providers so the negotiation and policy logic can be tested without making real calls or consuming external API credits.
+
+The architecture test (`tests/test_architecture.py`) enforces this separation.
+
+---
+
+## Tool surface
+
+The model receives a deliberately narrow set of tools:
+
+```text
+find_provider
+get_transaction_policy
+start_call
+record_offer
+request_user_approval
+confirm_booking
+end_call
+```
+
+It does not receive arbitrary database, HTTP, or infrastructure access.
+
+Most importantly, the model cannot simply decide that a transaction is acceptable.
+
+Actions are re-evaluated by deterministic code before they are allowed to proceed.
+
+---
+
+## Hard agent rules
+
+The agent is designed to:
+
+* identify itself as an AI when asked;
+* never invent a price, availability, or agreement;
+* never claim confirmation before confirmation exists;
+* never guess an unclear spoken number;
+* ask the supplier to repeat unclear information;
+* treat every changed price as a new offer;
+* re-evaluate every offer against the current policy;
+* never exceed the delegated purchasing authority;
+* stop or escalate when an action is outside its authority.
+
+---
+
+## Data model
+
+The core entities are:
+
+```text
+providers
+transactions
+negotiations
+offers
+recommendations
+approvals
+audit_events
+```
+
+Providers are currently seeded from `.env`.
+
+**Provider discovery is intentionally outside the current hackathon scope.**
+
+The product assumes that a business already has suppliers it is permitted to contact.
+
+---
+
+## State machine
+
+```text
+CREATED
+   ↓
+PROVIDER_SELECTED
+   ↓
+CALLING
+   ↓
+NEGOTIATING
+   ├──► AGREED_WITHIN_POLICY → RESULT_READY
+   ├──► OUTSIDE_AUTHORITY    → AWAITING_APPROVAL
+   ├──► UNAVAILABLE          → NEXT_PROVIDER / FAILED
+   └──► FAILED
+
+RESULT_READY / AWAITING_APPROVAL
+   ├──► APPROVED → CONFIRMING → CONFIRMED
+   └──► DECLINED → CLOSED
+```
+
+Every transition is checked against an explicit allow-list in:
+
+```text
+app/states.py::ALLOWED_TRANSITIONS
+```
+
+Invalid transitions raise an error instead of silently occurring.
+
+---
 
 ## Setup
 
-Toolchain is pinned in `mise.toml` — Python 3.12.14, `uv`, `cloudflared`. System Python is not
-used.
+Toolchain is pinned in `mise.toml`.
 
 ```bash
-# 1. Toolchain
+# 1. Install the pinned toolchain
 mise install
-# if your shell hasn't picked up mise, prefix every command below with: mise exec --
 
-# 2. Python dependencies
+# If your shell has not picked up mise:
+# prefix commands with:
+# mise exec --
+
+# 2. Install Python dependencies
 uv sync
 
-# 3. Configuration
+# 3. Configure environment
 cp .env.example .env
-# fill in at least: two provider name/phone pairs (E.164 Kenyan, +254...), and — for real
-# calls/LLM reasoning — ANTHROPIC_API_KEY, AT_USERNAME/AT_API_KEY/AT_VOICE_NUMBER,
-# GOOGLE_APPLICATION_CREDENTIALS, VOICE_WEBHOOK_SECRET. Never commit .env.
+```
 
-# 4. Seed the two providers from .env
+For a real call, configure the required credentials and provider information in `.env`:
+
+```text
+ANTHROPIC_API_KEY
+ANTHROPIC_MODEL
+TWILIO_ACCOUNT_SID
+TWILIO_AUTH_TOKEN
+TWILIO_PHONE_NUMBER
+VOICE_WEBHOOK_SECRET
+WEBHOOK_BASE_URL
+```
+
+Never commit `.env`.
+
+Seed the configured providers:
+
+```bash
 uv run python -m app.seed
+```
 
-# 5. Run the API
+Run the API:
+
+```bash
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
-To let Africa's Talking reach your local webhook, open a tunnel and put its URL in
-`WEBHOOK_BASE_URL`:
+To expose the local webhook to Twilio:
 
 ```bash
 cloudflared tunnel --url http://localhost:8000
 ```
 
-The voice callback then lives at `$WEBHOOK_BASE_URL/webhooks/voice/$VOICE_WEBHOOK_SECRET` — the
-secret in the path is the only auth, since AT doesn't sign requests. Everything else that arrives
-through the tunnel gets a 403 (`app/middleware.py`): owner routes are local-only by design.
+Configure the Twilio Voice webhook to point to the appropriate voice callback under:
 
-Sanity-check your Anthropic key/model before relying on it live:
-
-```bash
-uv run python -m app.llm.anthropic
+```text
+$WEBHOOK_BASE_URL
 ```
+
+---
 
 ## Running the tests
 
 ```bash
-uv run pytest                                    # offline, all vendors faked — no keys needed
+# Offline test suite
+uv run pytest
+
+# Specific state-machine test
 uv run pytest tests/test_states.py::test_terminal_states_have_no_outgoing_transitions -q
-uv run ruff check . && uv run ruff format --check .
-uv run pytest -m live                            # hits the real Anthropic + Google APIs
+
+# Lint + formatting
+uv run ruff check .
+uv run ruff format --check .
+
+# Tests that hit real external APIs
+uv run pytest -m live
 ```
 
-Tests use an in-memory SQLite engine (`tests/conftest.py`) and never touch `transaction_agent.db`.
-Fake phone numbers in tests use `+2541…` (not `+2547…`) because the pre-publish secret scan greps
-for real Kenyan numbers.
+The default test suite does not require:
+
+* a Twilio phone number;
+* Twilio credentials;
+* an Anthropic API key;
+* external voice infrastructure.
+
+Tests use an in-memory SQLite database and fake external providers.
+
+---
 
 ## Scope & limitations
 
-**Deliberately not built** (see `04_Hackathon_Build_and_Demo_Plan`): a marketplace, payments,
-a universal provider scraper/discovery, a multi-agent swarm, a complex dashboard, production auth
-or billing, or more than one service category. Photography in Nairobi is the demo case, not the
-product boundary — see the roadmap below.
+Transaction Agent is intentionally **not** a full procurement platform yet.
 
-**Known failure handling:**
-- No answer → provider marked unavailable, tries the next seeded provider if one remains.
-- Dropped call → one retry, or the partial result is surfaced as-is.
-- A question outside the agent's authority → it states the limitation and escalates rather than
-  guessing.
+### Not in the current hackathon scope
 
-**Demo fallback:** if live telephony is unavailable at demo time, a rehearsal recording is used
-instead — always labelled on screen, never presented as a live call.
+* supplier marketplace;
+* universal supplier discovery;
+* web scraping;
+* payments;
+* automatic purchasing without approval;
+* multi-agent swarm architecture;
+* complex analytics dashboard;
+* production authentication;
+* billing;
+* enterprise SSO;
+* multiple procurement categories;
+* large-scale worker/queue infrastructure.
 
-## Roadmap (beyond this hackathon prototype)
+The current prototype uses **known/seeded suppliers**.
 
-P0 (this build) proves the mechanism for one category with two seeded providers. Later phases
-(from `01_Transaction_Agent_Product_Spec`) widen it: provider discovery instead of seeding,
-multiple service categories, payment execution after approval, and a real multi-user
-dashboard/auth layer. None of that is in scope here — the point of P0 is the negotiation loop and
-the authority boundary around it, not the surrounding product.
+That is deliberate.
+
+A business already has suppliers. The product's initial job is to automate the negotiation with those suppliers, not to build another marketplace.
+
+---
+
+## Known failure handling
+
+### Supplier does not answer
+
+The provider is marked unavailable and another seeded provider may be attempted if one exists.
+
+### Call drops
+
+The system can retry within the configured retry policy or surface the partial result.
+
+### Supplier gives an offer outside authority
+
+The agent does not accept it.
+
+The transaction is stopped or escalated according to policy.
+
+### Supplier asks an unclear question
+
+The agent asks for clarification rather than inventing an answer.
+
+### Live telephony is unavailable
+
+A rehearsal recording can be used for the hackathon demonstration.
+
+It is explicitly labelled as a rehearsal and never presented as a live call.
+
+---
+
+## Product direction
+
+The long-term product thesis is:
+
+> **The negotiation layer for procurement.**
+
+Existing procurement systems manage structured purchasing workflows.
+
+Transaction Agent is intended to handle the messy human interaction that happens before a transaction:
+
+**the phone calls, questions, counteroffers and negotiations.**
+
+The first wedge is narrow:
+
+```text
+Kenyan business
+      ↓
+Recurring local procurement
+      ↓
+Known suppliers
+      ↓
+Phone negotiation
+      ↓
+AI agent
+      ↓
+Deterministic purchasing policy
+      ↓
+Human approval
+```
+
+From there, the product can expand into additional supplier categories and procurement workflows.
+
+The current priority is **not** building every procurement feature.
+
+It is proving that a business can safely delegate a real supplier negotiation to an AI agent without giving the agent unrestricted purchasing authority.
+
+---
+
+## Roadmap
+
+### P0 — Hackathon prototype
+
+Prove the negotiation mechanism:
+
+* one procurement category;
+* seeded suppliers;
+* real outbound voice;
+* bounded negotiation;
+* deterministic policy enforcement;
+* audit trail;
+* human approval boundary.
+
+### P1 — Pilot
+
+Validate the product with real businesses:
+
+* one repeating procurement category;
+* real supplier relationships;
+* negotiation success rate;
+* supplier willingness to talk to an AI agent;
+* average negotiation duration;
+* cost per successful negotiation;
+* measurable savings/time saved.
+
+### P2 — Product
+
+Potential expansion:
+
+* multiple supplier categories;
+* supplier list ingestion;
+* approval workflows;
+* business accounts;
+* audit exports;
+* usage metering;
+* billing;
+* stronger authentication;
+* supplier discovery where appropriate;
+* post-approval transaction execution.
+
+The roadmap should follow evidence from pilots rather than building a large procurement platform before the negotiation loop is proven.
+
+---
 
 ## Repo map
 
-```
+```text
 app/
-  agent/          tool-calling negotiation engine (provider-neutral)
-  llm/            LLMProvider interface + Anthropic adapter (only vendor SDK import allowed here)
-  telephony/      TelephonyProvider interface + Africa's Talking adapter
-  speech/         SpeechToText interface + Google adapter
-  routes/         HTTP routes (voice webhook; transaction API is issue #6, pending)
-  policy.py       deterministic offer evaluation — no I/O, no clock, pure functions
+  agent/          tool-calling negotiation engine
+  llm/            LLMProvider interface + Anthropic adapter
+  telephony/      TelephonyProvider interface + Twilio adapter
+  routes/         HTTP routes, including voice webhook
+  policy.py       deterministic offer evaluation — no I/O, pure policy logic
   states.py       transaction state machine + allowed transitions
-  calls.py        connects telephony callbacks to one conversation agent per call
+  calls.py        connects telephony callbacks to conversations
   conversation.py turn-based conversation orchestration
-  models.py       SQLAlchemy models (providers, transactions, negotiations, offers, …)
+  models.py       SQLAlchemy models
   audit.py        append-only audit trail
-  config.py       Settings, mirrors .env.example field-for-field
-  seed.py         seeds the two providers from .env
-  main.py         FastAPI app, owner-route lockdown, serves web/dist if built
-web/              owner UI (Vite + React + TS) — not built yet
-tests/            offline test suite; fakes for every vendor; test_architecture.py enforces
-                  vendor isolation
-CLAUDE.md         conventions, spec pointers, and the canonical demo scenario for this repo
-TODOS.md          follow-ups from reviews, beyond the GitHub issue backlog
+  config.py       application settings
+  seed.py         seeds configured providers
+  main.py         FastAPI application
+
+web/
+  owner UI — Vite + React + TypeScript
+
+tests/
+  offline tests and vendor fakes
+  test_architecture.py enforces vendor isolation
+
+CLAUDE.md
+  repository conventions, specification pointers,
+  and canonical demo scenario
+
+TODOS.md
+  follow-ups and remaining implementation work
 ```
 
-## Where the spec lives
+---
 
-The authoritative build spec is GitHub issues on the private repo
-`SuperiorKe/transaction-agent`: **epic #10** holds the shared contracts (DB schema, state
-machine, policy rules, API shapes, agent tools, env vars); **issues #1–#9** are the build order.
-Where the original `.docx` doc pack and the issues disagree, the issues win — the epic lists
-every deliberate deviation. See `CLAUDE.md` for how to read those docs if you have access to them.
+## Where the specification lives
+
+The authoritative build specification is maintained in the private GitHub planning repository:
+
+```text
+SuperiorKe/transaction-agent
+```
+
+**Epic #10** contains the shared contracts:
+
+* database schema;
+* state machine;
+* policy rules;
+* API shapes;
+* agent tools;
+* environment variables.
+
+**Issues #1–#9** define the implementation order.
+
+Where the original document pack and the GitHub issues disagree, the issues take precedence.
+
+See `CLAUDE.md` for repository conventions and specification references.
+
+---
+
+## The core idea
+
+Transaction Agent is not trying to make an AI that can **do anything**.
+
+It is trying to make an AI that can **do one consequential thing safely**:
+
+> **Negotiate with a supplier on behalf of a business without exceeding the authority that business gave it.**
+
+**The agent negotiates.
+The policy enforces.
+The audit trail records.
+The human remains in control.**
