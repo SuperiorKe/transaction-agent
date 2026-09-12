@@ -15,7 +15,13 @@ class Settings(BaseSettings):
     anthropic_effort: str = "low"
     anthropic_refusal_fallback: str = "default"  # "" disables server-side refusal fallbacks
 
-    # Telephony (Africa's Talking Voice)
+    # Telephony (Twilio Voice).  The retired Africa's Talking settings remain below so an
+    # existing local .env continues to load while the pivot is being completed.
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_voice_number: str = ""  # the Twilio number calls are placed from, E.164
+
+    # Telephony (Africa's Talking Voice; retired)
     at_username: str = ""
     at_api_key: str = ""
     at_voice_number: str = ""  # the AT voice number calls are placed from, E.164
