@@ -115,3 +115,22 @@ Vendor boundaries are enforced by `tests/test_architecture.py`:
 - Telephony is the biggest risk. Build order: real outbound call → voice↔AI conversation → structured tools → policy checks → persistence → minimal approval UI → hardening.
 - **Do not build:** marketplace, payments, universal scraper/discovery, multi-agent swarm, complex dashboard, production auth or billing, multiple service categories.
 - The submission needs a public repo and a README covering setup, architecture, scenario, limitations, and roadmap.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
