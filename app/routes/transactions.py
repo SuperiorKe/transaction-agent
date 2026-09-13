@@ -24,6 +24,7 @@ from app.orchestrator import (
     CallGuardBlocked,
     StaleOffer,
     advance_from_unavailable,
+    check_call_guard,
     place_call,
     select_provider,
 )
@@ -148,6 +149,12 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         .limit(50)
     ).all()
 
+    allowed_actions = list(ALLOWED_ACTIONS_BY_STATUS.get(tx.status, ()))
+    if recommendation is None or recommendation.offer_id is None:
+        # An escalation reaches AWAITING_APPROVAL even when no price was ever quoted. With no
+        # offer_id there is nothing approvable, so don't advertise an approve that can only 409.
+        allowed_actions = [action for action in allowed_actions if action != "approve"]
+
     return TransactionView(
         id=tx.id,
         status=tx.status,
@@ -161,7 +168,7 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         current_provider=provider_view,
         negotiations=negotiations,
         recommendation=recommendation,
-        allowed_actions=list(ALLOWED_ACTIONS_BY_STATUS.get(tx.status, ())),
+        allowed_actions=allowed_actions,
         audit=[
             AuditEventView(type=e.event_type, payload=e.payload, at=e.created_at)
             for e in audit_rows
@@ -232,6 +239,12 @@ def build_transactions_router(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, detail=f"transaction is {tx.status}, not CREATED"
             )
+        # Check before select_provider: it commits CREATED -> PROVIDER_SELECTED, and a 429 after
+        # that would strand the transaction with no allowed action to retry from.
+        try:
+            check_call_guard(db, tx, settings.max_calls_per_day, now)
+        except CallGuardBlocked as exc:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
 
         provider = select_provider(db, tx)
         if provider is not None:
