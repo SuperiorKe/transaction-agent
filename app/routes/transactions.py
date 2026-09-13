@@ -148,6 +148,12 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         .limit(50)
     ).all()
 
+    allowed_actions = list(ALLOWED_ACTIONS_BY_STATUS.get(tx.status, ()))
+    if recommendation is None or recommendation.offer_id is None:
+        # An escalation reaches AWAITING_APPROVAL even when no price was ever quoted. With no
+        # offer_id there is nothing approvable, so don't advertise an approve that can only 409.
+        allowed_actions = [action for action in allowed_actions if action != "approve"]
+
     return TransactionView(
         id=tx.id,
         status=tx.status,
@@ -161,7 +167,7 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         current_provider=provider_view,
         negotiations=negotiations,
         recommendation=recommendation,
-        allowed_actions=list(ALLOWED_ACTIONS_BY_STATUS.get(tx.status, ())),
+        allowed_actions=allowed_actions,
         audit=[
             AuditEventView(type=e.event_type, payload=e.payload, at=e.created_at)
             for e in audit_rows

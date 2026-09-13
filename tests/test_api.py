@@ -306,6 +306,56 @@ def test_approve_on_a_transaction_not_awaiting_a_decision_is_409():
     assert response.status_code == 409
 
 
+def test_a_recommendation_with_an_offer_allows_approve_and_decline():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    _tx_at_result_ready(session_factory, tx_id)
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status"] == "RESULT_READY"
+    assert body["allowed_actions"] == ["approve", "decline"]
+
+
+def test_an_escalation_before_any_price_does_not_allow_approve():
+    """A deposit request before a price is quoted still lands in AWAITING_APPROVAL, but with no
+    offer_id there is nothing to approve: the view offers decline only (owner UI, DESIGN.md)."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    with session_factory() as db:
+        tx = db.get(Transaction, tx_id)
+        negotiation = db.scalar(select(Negotiation).where(Negotiation.transaction_id == tx_id))
+        on_call_answered(db, tx, negotiation, now=NOW)
+        negotiation.status = "ESCALATED"
+        negotiation.escalation_trigger = "deposit_or_payment_request"
+        negotiation.end_call_requested = True
+        db.commit()
+        asyncio.run(
+            on_call_ended(
+                db,
+                tx,
+                negotiation,
+                telephony=FakeTelephonyProvider(),
+                max_calls_per_day=40,
+                now=NOW,
+            )
+        )
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status"] == "AWAITING_APPROVAL"
+    assert body["recommendation"]["offer_id"] is None
+    assert body["allowed_actions"] == ["decline"]
+
+
 def test_decline_closes_the_transaction():
     session_factory = _session_factory()
     _seed_provider(session_factory)
