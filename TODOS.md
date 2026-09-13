@@ -50,8 +50,9 @@ functions are written and unit-tested. Meanwhile `ALLOWED_ACTIONS_BY_STATUS` sti
 **Why:** The API tells clients an action is allowed and offers nowhere to send it. The owner UI
 (#7) is deliberately `allowed_actions`-driven — it renders buttons from what the server says is
 legal rather than re-deriving the state machine client-side — so it will faithfully render a button
-that 404s. Four of the seventeen statuses and one whole component of #7 are dead surface until this
-lands.
+that 404s. Four of the eighteen statuses (`CONFIRMING`, `CONFIRM_RETRY_WAIT`, `CONFIRMED`,
+`CONFIRMATION_FAILED`) and one whole component of #7 are dead surface until this lands, and
+`APPROVED` is a non-terminal dead end.
 
 **Context:** Found while designing the owner UI; see `DESIGN.md` ("Known backend gaps").
 `start_confirmation(session, tx, *, telephony, max_calls_per_day, now)` raises `ApprovalRequired`
@@ -59,15 +60,34 @@ unless an APPROVED approvals row exists for the current recommendation's `offer_
 `retry_confirmation(session, tx, negotiation, *, telephony)` takes the negotiation, so a route must
 resolve the latest `kind="confirmation"` negotiation for the transaction itself. `approve_transaction`
 in `app/routes/transactions.py` carries a comment marking this as issue #6 priority 4 (stretch), so
-it's deferred rather than forgotten. Note also that `schedule_confirmation_retry`'s `scheduler`
-argument defaults to a no-op, so nothing leaves `CONFIRM_RETRY_WAIT` on its own in production —
-the manual retry route is the only exit. Cheapest correct interim fix if the full wiring stays out
+it's deferred rather than forgotten. Note also that nothing calls `schedule_confirmation_retry`, so
+`CONFIRM_RETRY_WAIT` is never entered in production; and when a `scheduler` is passed, the callback
+it hands over is `lambda: None`, so wiring a real timer would still retry nothing. Fix both when
+wiring the retry, or drop the status from the flow. Cheapest correct interim fix if the full wiring stays out
 of scope: drop `retry_confirmation` from `ALLOWED_ACTIONS_BY_STATUS` so the API stops advertising an
 action it cannot serve.
 
 **Effort:** M
 **Priority:** P2
 **Depends on:** None (the orchestrator functions already exist and are tested)
+
+### Recover a transaction stuck at UNAVAILABLE after the call guard
+
+**What:** When the daily call guard trips during provider fallback, `advance_from_unavailable` in
+`app/orchestrator.py` returns and leaves the transaction at `UNAVAILABLE` "for a human to retry
+once the daily limit resets". `ALLOWED_ACTIONS_BY_STATUS` advertises nothing for `UNAVAILABLE` and
+no route resumes the cascade, so no human can.
+
+**Why:** The transaction is non-terminal with no way forward: the owner UI polls it forever and can
+only show "last update N min ago" (DESIGN.md decision 6).
+
+**Context:** Found by `/design-review` of `DESIGN.md` (gap 4). Options: move it to `FAILED` with a
+`DECLINE` recommendation that says the daily limit was hit (simplest, and honest), or add a
+`resume` action + route that re-enters `advance_from_unavailable`.
+
+**Effort:** S (fail it) / M (resume route)
+**Priority:** P3
+**Depends on:** None
 
 ### Webhook secret entropy + basic abuse throttling
 
