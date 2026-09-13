@@ -24,6 +24,7 @@ from app.orchestrator import (
     CallGuardBlocked,
     StaleOffer,
     advance_from_unavailable,
+    check_call_guard,
     place_call,
     select_provider,
 )
@@ -238,6 +239,12 @@ def build_transactions_router(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, detail=f"transaction is {tx.status}, not CREATED"
             )
+        # Check before select_provider: it commits CREATED -> PROVIDER_SELECTED, and a 429 after
+        # that would strand the transaction with no allowed action to retry from.
+        try:
+            check_call_guard(db, tx, settings.max_calls_per_day, now)
+        except CallGuardBlocked as exc:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
 
         provider = select_provider(db, tx)
         if provider is not None:

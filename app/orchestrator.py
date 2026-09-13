@@ -119,7 +119,7 @@ def _calls_today(session: Session, moment: datetime) -> int:
     )
 
 
-def _check_call_guard(
+def check_call_guard(
     session: Session, tx: Transaction, max_calls_per_day: int, now: Callable[[], datetime]
 ) -> None:
     count = _calls_today(session, now())
@@ -184,7 +184,7 @@ async def place_call(
 ) -> Negotiation:
     """PROVIDER_SELECTED -> CALLING or UNAVAILABLE. Raises CallGuardBlocked before dialing if
     Settings.max_calls_per_day negotiations were already created today (Africa/Nairobi)."""
-    _check_call_guard(session, tx, max_calls_per_day, now)
+    check_call_guard(session, tx, max_calls_per_day, now)
     negotiation = Negotiation(transaction_id=tx.id, provider_id=provider.id, kind="negotiation")
     session.add(negotiation)
     session.flush()
@@ -219,7 +219,7 @@ async def advance_from_unavailable(
             write_recommendation(session, tx, offer=None, provider=None, counteroffers_made=0)
             return
         try:
-            _check_call_guard(session, tx, max_calls_per_day, now)
+            check_call_guard(session, tx, max_calls_per_day, now)
         except CallGuardBlocked:
             return
         transition(session, tx, TxStatus.NEXT_PROVIDER.value, "trying next provider")
@@ -602,7 +602,7 @@ async def start_confirmation(
         {"negotiation_id": negotiation.id, "provider_id": provider.id, "kind": "confirmation"},
     )
     session.commit()
-    _check_call_guard(session, tx, max_calls_per_day, now)
+    check_call_guard(session, tx, max_calls_per_day, now)
     await _dial_confirmation(session, tx, negotiation, provider, telephony=telephony)
     return negotiation
 
@@ -796,6 +796,7 @@ __all__: Sequence[str] = (
     "UnrecognizedCallAgent",
     "advance_from_unavailable",
     "approve",
+    "check_call_guard",
     "decline",
     "on_call_answered",
     "on_call_ended",

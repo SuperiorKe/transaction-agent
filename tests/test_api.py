@@ -220,6 +220,34 @@ def test_start_hitting_the_call_guard_is_429():
     assert telephony.placed_calls == []
 
 
+def test_start_blocked_by_the_call_guard_leaves_the_transaction_startable():
+    """The guard runs before a provider is selected, so a 429 leaves the transaction CREATED with
+    start still allowed, not stranded at PROVIDER_SELECTED (owner UI retry path, DESIGN.md)."""
+    session_factory = _session_factory()
+    provider = _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory, settings=_settings(max_calls_per_day=1))
+    client = TestClient(app)
+    earlier_tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        db.add(
+            Negotiation(
+                transaction_id=earlier_tx_id,
+                provider_id=provider.id,
+                kind="negotiation",
+                created_at=NOW().isoformat(timespec="milliseconds"),
+            )
+        )
+        db.commit()
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+
+    assert client.post(f"/transactions/{tx_id}/start").status_code == 429
+
+    body = client.get(f"/transactions/{tx_id}").json()
+    assert body["status"] == "CREATED"
+    assert body["allowed_actions"] == ["start"]
+    assert body["current_provider"] is None
+
+
 # --- POST /transactions/{id}/approve and /decline ------------------------------------------------
 
 
