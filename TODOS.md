@@ -28,6 +28,23 @@ The primary backlog is GitHub issues: epic #10 and sub-issues #1-#9. This file h
 **Priority:** P1
 **Depends on:** Issue #2 (telephony proof)
 
+### Commit the provider's words before awaiting the model
+
+**What:** In `app/agent/session.py` `respond()`, commit the provider's transcript turn before `await self._run(...)`. That way a poll sees what the provider said while the agent's reply is still being generated.
+
+**Why:** Today `_write_transcript("provider", message.text)` only reaches the database at the `self._session.commit()` after the model returns. So the owner UI's transcript lags a full model round behind the call. Acceptance criterion 4 of #7 (a turn visible within 2 s) would measure poll speed, not what judges see.
+
+The outside-voice review also suspects that once `record_offer` flushes, a SQLite write lock is held across the rest of the model rounds. That could block `/approve` or Twilio status callbacks. This is unverified.
+
+**Context:** Found by the outside-voice pass of `/plan-eng-review` on owner UI build step 1 (2026-09-14).
+- The comment in `respond()` says the provider turn is written before the engine runs so `record_offer`'s amount-heard check sees it; committing keeps that working.
+- Decide what a committed provider turn means if the model call then fails. Probably fine, since it's what was actually said.
+- Test the lock theory with two sessions against a file-backed SQLite DB before and after the change.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None; must land before owner UI build step 3 (CallPanel)
+
 ### Distinguish STT failures from caller silence in the audit trail
 
 **What:** `AfricasTalkingVoiceProvider._transcribe` swallows any speech-to-text exception (auth, network, quota) and returns `""`, which `CallCoordinator` then treats as ordinary caller silence. `app/audit.py`'s `EVENT_TYPES` has no distinct type for it, and no new module in this diff calls `record_event` at all yet.
@@ -140,6 +157,7 @@ only show "last update N min ago" (DESIGN.md decision 6).
 - It asks for Python 3.10+, but the project pins 3.12.
 - It lists the uvicorn command twice.
 - Its tree shows `app/policy/`, but the code is `app/policy.py`.
+- Its pitch is "Nego", a procurement agent ("500kg of produce. Maximum KES 80,000"). The backend only accepts photography (`TransactionCreate.service` is `Literal["photography"]`), and CLAUDE.md's canonical scenario is a photographer at KES 20,000. On 2026-09-14 the owner UI's fixtures were set to follow the backend. Reconcile the product story here, together with the submission copy.
 
 The doc-sync skipped it because it's a rewrite of more than 10 lines. Do it after build step 1, so the web/ commands are real.
 
