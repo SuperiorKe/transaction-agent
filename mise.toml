@@ -1,4 +1,5 @@
 [tools]
 python = "3.12.14"
 uv = "latest"
+node = "26.8.1"
 cloudflared = "latest"

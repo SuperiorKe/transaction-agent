@@ -16,6 +16,10 @@ __pycache__/
 # Web
 web/node_modules/
 web/dist/
+# Generated from web/openapi.json by `npm run gen:api` (pretest/prebuild); never committed
+web/src/api/openapi.gen.ts
+web/test-results/
+web/playwright-report/
 
 # gstack tool state (design-board daemon writes .gstack/design.json here)
 .gstack/
