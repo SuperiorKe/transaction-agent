@@ -5,9 +5,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from starlette.types import Receive, Scope, Send
 
 from app.agent.engine import NegotiationEngine
 from app.agent.prompts import NEGOTIATION_SYSTEM_PROMPT
@@ -31,6 +32,20 @@ from app.telephony.twilio import build_twilio_provider
 log = logging.getLogger(__name__)
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+
+
+class _BuiltAssets(StaticFiles):
+    """StaticFiles for web/dist/assets that is a 404 until the first build, not a 500.
+
+    Starlette checks the directory once and raises while it's missing; the owner UI may be built
+    after uvicorn starts, so check on every request and keep Starlette's own path handling.
+    """
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.directory is None or not Path(self.directory).is_dir():
+            await PlainTextResponse("Not Found", status_code=404)(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
 
 
 def _default_llm_factory(settings: Settings) -> LLMProvider:
@@ -90,10 +105,12 @@ def create_app(
     *,
     session_factory: Callable[[], Session] | None = None,
     llm_factory: Callable[[Settings], LLMProvider] = _default_llm_factory,
+    web_dist: Path = WEB_DIST,
+    telephony: TelephonyProvider | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     session_factory = session_factory or SessionLocal
-    telephony = build_twilio_provider(settings)
+    telephony = telephony or build_twilio_provider(settings)
     agent_factory = _build_negotiation_agent_factory(
         settings, session_factory, llm_factory, telephony
     )
@@ -119,12 +136,21 @@ def create_app(
     def health() -> dict[str, bool]:
         return {"ok": True}
 
-    if (WEB_DIST / "index.html").exists():
-        app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+    # Always registered and checked per request, so `npm run build` needs no uvicorn restart.
+    app.mount(
+        "/assets", _BuiltAssets(directory=web_dist / "assets", check_dir=False), name="assets"
+    )
 
-        @app.get("/", include_in_schema=False)
-        def index() -> FileResponse:
-            return FileResponse(WEB_DIST / "index.html")
+    @app.get("/", include_in_schema=False)
+    def index() -> Response:
+        index_html = web_dist / "index.html"
+        if not index_html.is_file():
+            return PlainTextResponse(
+                "The owner UI isn't built yet. Run `npm run build` in web/.", status_code=404
+            )
+        # Assets are content-hashed and a rebuild deletes the old ones, so a cached index.html
+        # would point at files that no longer exist.
+        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     return app
 
