@@ -101,4 +101,50 @@ only show "last update N min ago" (DESIGN.md decision 6).
 **Priority:** P3
 **Depends on:** None
 
+## Infrastructure
+
+### Run the test suites in CI on every push and PR
+
+**What:** Add a GitHub Actions workflow that runs `uv run pytest`, `uv run ruff check . && uv run ruff format --check .`, then in `web/` `npm ci && npm test && npm run build`, and the Playwright E2E.
+
+**Why:** The repo has no CI at all (`.github/workflows/` doesn't exist). Every suite runs only on whichever laptop remembers to run it, so a push can break `main`, and it's a public submission repo (#9).
+
+**Context:** Found by `/plan-eng-review` of owner UI build step 1 (2026-09-14). Every test is offline by design (`FakeTelephonyProvider`, `ScriptedLLMProvider`, no secrets), so the workflow needs no credentials. Start from the Commands table in CLAUDE.md and install the toolchain with mise (`mise.toml` pins Python, uv and Node). The Playwright lane needs its browser installed in CI, which makes it the slow lane. It also catches a stale `web/openapi.json` snapshot, which a pytest guards.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Owner UI build step 1 landing (the web/ tests and E2E exist then)
+
+### Keep pyproject, package.json and FastAPI versions in step with VERSION
+
+**What:** Make `VERSION` the single source for the project's version numbers. Add a pytest that checks `pyproject.toml` (3-digit), `web/package.json` and the FastAPI app version all match it, or document a manual sync step in the release flow.
+
+**Why:** PR #20 bumped `VERSION` to `0.2.1.0`, but `pyproject.toml` still says `0.2.0` (so does `uv.lock`), and `/openapi.json` reports `0.1.0`. With `web/package.json` that's three drifting version fields, and it's unclear which build is on the demo laptop.
+
+**Context:** Found by `/plan-eng-review` of owner UI build step 1 (2026-09-14). `/ship`'s `gstack-version-bump` only syncs `package.json`, and it can't run here without `bun`. A pyproject bump needs `uv lock` afterwards. The committed `web/openapi.json` snapshot will carry the FastAPI version, so fixing this regenerates it.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Owner UI build step 1 (web/package.json exists)
+
+## Docs
+
+### Fix README's setup section
+
+**What:** Rewrite README's setup from CLAUDE.md's Commands table (`mise install`, `uv sync`, seed, uvicorn, and the `web/` `npm ci` / build steps), and correct the repo tree.
+
+**Why:** It's the first thing judges and teammates read, and following it fails on the very first step. The submission (#9) requires a README that covers setup.
+
+**Context:** Logged as documentation debt by the doc-sync on PR #20:
+- It says `pip install -r requirements.txt`, but there's no `requirements.txt` (the project uses uv and `pyproject.toml`).
+- It asks for Python 3.10+, but the project pins 3.12.
+- It lists the uvicorn command twice.
+- Its tree shows `app/policy/`, but the code is `app/policy.py`.
+
+The doc-sync skipped it because it's a rewrite of more than 10 lines. Do it after build step 1, so the web/ commands are real.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Owner UI build step 1; part of issue #9
+
 ## Completed

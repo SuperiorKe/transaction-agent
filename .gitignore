@@ -16,3 +16,6 @@ __pycache__/
 # Web
 web/node_modules/
 web/dist/
+
+# gstack tool state (design-board daemon writes .gstack/design.json here)
+.gstack/
