@@ -97,8 +97,8 @@ nodes are not legible at 1280×720. One `STAGE_OF: Record<string, Stage>` map:
 | Confirming    | `CONFIRMING`, `CONFIRM_RETRY_WAIT`, `CONFIRMATION_FAILED`                   |
 | Done          | `CONFIRMED` (ok) · `DECLINED`/`CLOSED` (closed) · `FAILED` (failed)         |
 
-The current chip is highlighted and the **raw status is printed underneath it in small text**, so a
-judge sees the shape and a developer sees the precise state. Anything unmapped renders a visible
+The current chip is highlighted and the **raw status is printed under the chip row in small text**,
+so a judge sees the shape and a developer sees the precise state. Anything unmapped renders a visible
 "unknown status" rather than a blank chip — a new status in `app/states.py` should be obvious, not
 invisible.
 
@@ -309,8 +309,8 @@ the counterweight.
 | Component             | Gets                                                               | Owns                          | Calls                                        |
 | --------------------- | ------------------------------------------------------------------ | ----------------------------- | -------------------------------------------- |
 | `RequestComposer`     | —                                                                  | `text`, `parsing`, `error`    | `POST /parse-request`                        |
-| `ConstraintCard`      | `ParsedRequest`, composer `text`                                   | form fields, validity         | `POST /transactions` → `POST /{id}/start`    |
-| `StatusTimeline`      | `tx.status`, `tx.audit[0].at`                                      | —                             | —                                            |
+| `ConstraintCard`      | `ParsedRequest`, composer `text`; once created, `tx.service`, `tx.service_date`, `tx.location`, `tx.max_budget`, `tx.max_attempts` | form fields, validity | `POST /transactions` → `POST /{id}/start` |
+| `StatusTimeline`      | `tx.status`, `tx.audit[]` (`status.changed` events for reached stages, `[0].at` for last update) | — | —                                    |
 | `CallPanel`           | latest `kind="negotiation"` entry, `tx.current_provider`, `tx.max_attempts` | ticking timer off `answered_at` | —                                  |
 | `RecommendationCard`  | `tx.recommendation`, `tx.allowed_actions`, `tx.max_budget`, offers | —                             | `POST /{id}/approve` · `/decline`            |
 | `ConfirmationPanel`   | `tx.status`, `tx.allowed_actions`                                  | —                             | `POST /{id}/retry_confirmation` ⚠ route missing |
