@@ -7,11 +7,9 @@ Ground truth is **issue #7** on `SuperiorKe/transaction-agent`; this file record
 issue left open, and the backend gaps found while resolving them. Where this file and the issue
 disagree, the deviations are called out explicitly below.
 
-> Location note: this lives at the repo root rather than `web/DESIGN.md` only because `web/` doesn't
-> exist yet and scaffolding into an empty directory is cleaner. Move it into `web/` once the
-> scaffold lands. Moving it also matters for tooling: gstack's design skills read a root
-> `DESIGN.md` as the project's visual design system (fonts, colour and spacing tokens), which this
-> file only partly is.
+> Location note: this stays at the repo root. It started here because `web/` didn't exist yet, and
+> it now also holds the visual system (fonts, colour and spacing tokens), which gstack's design
+> skills read from a root `DESIGN.md`. Don't move it into `web/`.
 
 ## The one non-negotiable rule
 
@@ -201,12 +199,15 @@ to be checked on the real projector at rehearsal:
 - **Columns:** about 2:3, left for what was asked and what came back, right for the live call. Before
   a transaction exists, `RequestComposer` + `ConstraintCard` sit in one centred column.
 - **Type:** 18px base, because judges read it from across a room. Amounts use
-  `font-variant-numeric: tabular-nums` and are always written `KES 23,000`. The raw status under
-  the timeline is the one small-text element.
-- **Colour:** neutral surfaces and one accent for the primary action. `WITHIN_LIMIT` and
-  `REQUIRES_APPROVAL` each get a colour (green, amber) **and** their text label, never colour alone.
-- **Over-cap approval:** when `policy_status` is `REQUIRES_APPROVAL` and there's a price, the Approve
-  label carries the overage, `Approve KES 23,000 · KES 3,000 over your cap`. The canonical scenario
+  `font-variant-numeric: tabular-nums` and are always written `KES 23,000`. One line may be small:
+  the status line under the timeline (raw status · last update).
+- **Colour:** neutral surfaces and one accent, used only for the primary action. `WITHIN_LIMIT`,
+  `REQUIRES_APPROVAL` and failure each get a colour (green, amber, red) **and** an icon and text
+  label, never colour alone.
+- **Over-cap approval:** when `final_price` is above `tx.max_budget`, the Approve label carries the
+  overage, `Approve KES 23,000 · KES 3,000 over your cap`. Key it off the two numbers, not
+  `policy_status`: escalations that aren't about price (a deposit request, say) are also
+  `REQUIRES_APPROVAL`, and there the overage would read "KES 0 over your cap". The canonical scenario
   ends exactly here, and the user is granting authority beyond their own cap. The overage is
   `final_price − tx.max_budget`, shown, not used to decide anything.
 - **No horizontal scroll:** the transcript wraps, and no element has a fixed width wider than its
@@ -222,22 +223,29 @@ Everything needed to build it is below.
 
 **Tokens** (CSS custom properties on `:root`):
 
-| Token          | Value                            | Used for                                                            |
-| -------------- | -------------------------------- | ------------------------------------------------------------------- |
-| `--bg`         | `#0d1117`                        | page ground                                                         |
-| `--panel`      | `#151b23`                        | cards, stage chips                                                  |
-| `--panel-2`    | `#1b2330`                        | quiet pills ("Call ended")                                          |
-| `--line`       | `#2a3441`                        | borders, dividers                                                   |
-| `--text`       | `#e6edf3`                        | primary text                                                        |
-| `--muted`      | `#8d9aa8`                        | labels, secondary text, the provider's speaker label                |
-| `--accent`     | `#2dd4e6`                        | the one primary action, the agent's speaker label, the brand dot     |
-| `--accent-ink` | `#03171b`                        | text on `--accent`                                                  |
-| `--amber`      | `#f2b441`, ground `rgba(242,180,65,.13)` | `REQUIRES_APPROVAL`, the current stage, amounts in the transcript |
-| `--green`      | `#4ac26b`                        | done-stage ticks, `WITHIN_LIMIT`                                    |
+| Token            | Value                  | Used for                                                                     |
+| ---------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| `--bg`           | `#0d1117`              | page ground                                                                  |
+| `--panel`        | `#151b23`              | cards, stage chips                                                           |
+| `--panel-2`      | `#1b2330`              | quiet pills ("Call ended")                                                   |
+| `--line`         | `#2a3441`              | borders, dividers                                                            |
+| `--text`         | `#e6edf3`              | primary text, the agent's speaker label, the recommendation's reason         |
+| `--muted`        | `#8d9aa8`              | labels, terms and availability, the provider's speaker label, the brand dot  |
+| `--accent`       | `#2dd4e6`              | the one primary action (Approve), and nothing else                           |
+| `--accent-ink`   | `#03171b`              | text on `--accent`                                                           |
+| `--amber`        | `#f2b441`              | `REQUIRES_APPROVAL`, the current stage                                       |
+| `--amber-ground` | `rgba(242,180,65,.13)` | ground of the current chip and the approval pill                             |
+| `--amber-edge`   | `#4a3d22`              | RecommendationCard border while an approval is pending                       |
+| `--green`        | `#4ac26b`              | reached-stage ticks, `CONFIRMED`, `WITHIN_LIMIT`                             |
+| `--red`          | `#f47067`              | `FAILED` and unknown-status chips, always with ✕ and a text label            |
 
-**Type:** IBM Plex Sans (400–700) everywhere. IBM Plex Mono for speaker labels, the raw status,
-the masked phone number and the call stats. Base 18px / 1.4. Final price 44px bold, provider
-name 24px bold. The raw status line is 13px mono, still the one small-text element.
+**Type:** IBM Plex Sans (400–700) everywhere, with IBM Plex Mono for speaker labels, the raw status,
+the masked phone number and the call stats. Bundle both with the app (for example
+`@fontsource/ibm-plex-sans` and `@fontsource/ibm-plex-mono`) instead of loading Google Fonts: on
+venue Wi-Fi a late font swap reflows a screen fitted to 720px. Check that ▲ ✓ ● ✕ render in Plex,
+and use inline SVG icons if they fall back. Base 18px / 1.4, and everything is 18px except: the
+final price (44px bold), the provider name (24px bold), and the status line under the timeline
+(13px mono, the one small-text element).
 
 **Shape and spacing:** cards have a 1px `--line` border, 10px radius and 14px 18px padding. Stage
 chips use a 6px radius, buttons 8px, pills are fully rounded. Page padding is 14px 24px, with 16px
@@ -245,27 +253,56 @@ between columns and 12px between cards.
 
 **Components:**
 
-- **StatusTimeline:** six equal chips beside the brand. Done chips show `--text` with a green ✓.
-  The current chip has an amber border, an amber ground and a ●. Future chips are `--muted`. The
-  raw status (in `--amber`) and "last update …" sit in mono under the current chip.
-- **ConstraintCard:** a 2×2 grid of label over value (Service, When, Where, Your cap). The client's
-  own word ("Monday") follows the resolved date in `--muted`.
-- **RecommendationCard:** fills the rest of the left column. The header reads "Recommendation · ask
-  you" beside a pill with an icon and text ("▲ Requires approval"), never colour alone. Below it: the
-  price, provider · availability, terms and reason in `--muted`, then the actions pinned to the
-  bottom. Approve is filled `--accent` with a two-line label (amount, then overage). Decline is a
-  132px outlined button. While `policy_status` is `REQUIRES_APPROVAL`, the card gets a faint
-  amber edge (`#4a3d22` border).
+- **StatusTimeline:** six equal chips beside the brand (the product name after a `--muted` dot,
+  owned by this component). A chip gets a green ✓ only for a stage the transaction actually
+  reached, read from its `status.changed` audit events, never from the chip's position: `DECLINED`
+  and `CLOSED` skip Confirming, and `FAILED` can follow straight from Request or Calling, so a
+  skipped stage stays `--muted` with no mark. `tx.audit` is capped at 50, so treat every stage
+  before the earliest surviving event as reached. The current chip has an `--amber` border, an
+  `--amber-ground` fill and a ●, except in the terminal Done stage: `CONFIRMED` gets a green ✓,
+  `DECLINED`/`CLOSED` a `--muted` "Closed", and `FAILED` a `--red` ✕ "Failed". An unmapped status
+  gets a `--red` ✕ "unknown status" chip. Future chips are `--muted`. The status line (raw status
+  in the current chip's colour · "last update …", 13px mono) runs full width under the whole chip
+  row, because a status like `AGREED_WITHIN_POLICY` doesn't fit under one chip.
+- **ConstraintCard:** once the transaction exists, a read-only grid of label over value: Service,
+  When, Where, Your cap, and Counteroffers (up to `tx.max_attempts`). The client's own word
+  ("Monday") follows the resolved date in `--muted`. `date_text` isn't on `TransactionView`, so
+  after a `?tx=` refresh show the resolved date alone; don't re-parse `tx.request`. Build the
+  weekday from the ISO date's parts or format it with `timeZone: "Africa/Nairobi"`:
+  `new Date("2026-09-14")` is UTC midnight, which shows Sunday in any browser west of UTC. Before
+  creation the same card is the editable form, in the same tokens, and the unsupported-service
+  message (decision 5) carries an icon and text, never colour alone.
+- **RecommendationCard:** fills the rest of the left column. The header follows `recommendation`
+  ("Recommendation · accept", "· ask you", "· decline") and the pill follows `policy_status`:
+  `WITHIN_LIMIT` is a `--green` "✓ Within limit", `REQUIRES_APPROVAL` is `--amber` on
+  `--amber-ground` "▲ Requires approval", and `NONE` shows no pill. Below it: the price, provider
+  · availability and terms in `--muted`, and the reason in `--text`. A long reason (an over-budget
+  explanation with a dropped-call note, or a list of provider outcomes) scrolls inside the card, so
+  the actions pinned to the bottom never leave the 720px screen. Show the price large only when
+  the joined offer is `available`: a `DECLINE` for an unavailable provider can still carry an
+  `offer_id`, so show "Unavailable on <date>" there, and "No price quoted" when `final_price` is
+  null. Approve is filled `--accent`, and its second label line (the overage) appears only when
+  `final_price` is above `tx.max_budget`. Decline is a 132px outlined button. Disable both while
+  either request is in flight. The approval styling (the pill and an `--amber-edge` border) shows
+  only while `approve` or `decline` is in `tx.allowed_actions`; the recommendation row survives
+  into `APPROVED` and `CLOSED`, where "Requires approval" would be stale.
 - **CallPanel:** provider name and masked phone on the left. Duration and Counteroffers stats sit
-  on the right in mono, with a "Call ended" pill. Transcript rows use a 96px uppercase mono speaker
-  column (agent in `--accent`, provider in `--muted`). Amounts spoken on the call are `--amber`
-  semibold, so a judge can follow the numbers without reading every word.
+  on the right in mono, beside a status pill derived from the negotiation's `status`: "Dialing"
+  (`DIALING`), "Ringing" (`RINGING`), "Live" (`IN_PROGRESS`), and "Call ended" for every other
+  `NegStatus`, so "Call ended" never shows before the call has ended. Transcript rows use a 96px
+  uppercase mono speaker column: `agent` in `--text` bold, `provider` in `--muted`, and `system`
+  turns in `--muted` italic with no label. Amounts are `--text` semibold, so a judge can follow
+  the numbers, but only amounts that match one of this negotiation's `offers[].amount` (as `23,000`
+  or `23000`); don't pull other numbers out of the speech text. Build highlighted turns as React
+  nodes, never `dangerouslySetInnerHTML`: the text is the provider's speech and the model's words.
 - **AuditLog:** collapsed to one row under a top border.
 
 **Check at rehearsal:** a dark ground can wash out on a projector in a bright room. If it does,
-swap the token values for a light ground and keep their roles. Don't change the layout. The
-filled Approve is the primary button even over the cap. That was accepted knowingly, and the
-overage in its label is the counterweight.
+move to a light ground and keep every token's role, but choose new values instead of reusing
+these: on white, `--amber` is 1.85:1, `--green` 2.28:1 and `--accent` 1.80:1, all too faint for
+text. Don't change the layout. The filled Approve is the primary button even over the cap. The
+owner chose that over two variants that gave Approve less weight, and the overage in its label is
+the counterweight.
 
 ## Component contracts
 
