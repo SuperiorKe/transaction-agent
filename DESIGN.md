@@ -212,6 +212,61 @@ to be checked on the real projector at rehearsal:
 - **No horizontal scroll:** the transcript wraps, and no element has a fixed width wider than its
   column.
 
+## Visual system
+
+Approved on 14 Sep 2026 with `/design-shotgun`. Three directions were rendered as real 1280×720
+HTML pages of the canonical approval moment: this dark "Control Room" look, a warm-paper serif
+report, and a white decision-first hero with a cap-vs-quote bar. The mockup and its source HTML
+live in gstack's design store (`designs/approval-moment-20260913/variant-A.*`), not in this repo.
+Everything needed to build it is below.
+
+**Tokens** (CSS custom properties on `:root`):
+
+| Token          | Value                            | Used for                                                            |
+| -------------- | -------------------------------- | ------------------------------------------------------------------- |
+| `--bg`         | `#0d1117`                        | page ground                                                         |
+| `--panel`      | `#151b23`                        | cards, stage chips                                                  |
+| `--panel-2`    | `#1b2330`                        | quiet pills ("Call ended")                                          |
+| `--line`       | `#2a3441`                        | borders, dividers                                                   |
+| `--text`       | `#e6edf3`                        | primary text                                                        |
+| `--muted`      | `#8d9aa8`                        | labels, secondary text, the provider's speaker label                |
+| `--accent`     | `#2dd4e6`                        | the one primary action, the agent's speaker label, the brand dot     |
+| `--accent-ink` | `#03171b`                        | text on `--accent`                                                  |
+| `--amber`      | `#f2b441`, ground `rgba(242,180,65,.13)` | `REQUIRES_APPROVAL`, the current stage, amounts in the transcript |
+| `--green`      | `#4ac26b`                        | done-stage ticks, `WITHIN_LIMIT`                                    |
+
+**Type:** IBM Plex Sans (400–700) everywhere. IBM Plex Mono for speaker labels, the raw status,
+the masked phone number and the call stats. Base 18px / 1.4. Final price 44px bold, provider
+name 24px bold. The raw status line is 13px mono, still the one small-text element.
+
+**Shape and spacing:** cards have a 1px `--line` border, 10px radius and 14px 18px padding. Stage
+chips use a 6px radius, buttons 8px, pills are fully rounded. Page padding is 14px 24px, with 16px
+between columns and 12px between cards.
+
+**Components:**
+
+- **StatusTimeline:** six equal chips beside the brand. Done chips show `--text` with a green ✓.
+  The current chip has an amber border, an amber ground and a ●. Future chips are `--muted`. The
+  raw status (in `--amber`) and "last update …" sit in mono under the current chip.
+- **ConstraintCard:** a 2×2 grid of label over value (Service, When, Where, Your cap). The client's
+  own word ("Monday") follows the resolved date in `--muted`.
+- **RecommendationCard:** fills the rest of the left column. The header reads "Recommendation · ask
+  you" beside a pill with an icon and text ("▲ Requires approval"), never colour alone. Below it: the
+  price, provider · availability, terms and reason in `--muted`, then the actions pinned to the
+  bottom. Approve is filled `--accent` with a two-line label (amount, then overage). Decline is a
+  132px outlined button. While `policy_status` is `REQUIRES_APPROVAL`, the card gets a faint
+  amber edge (`#4a3d22` border).
+- **CallPanel:** provider name and masked phone on the left. Duration and Counteroffers stats sit
+  on the right in mono, with a "Call ended" pill. Transcript rows use a 96px uppercase mono speaker
+  column (agent in `--accent`, provider in `--muted`). Amounts spoken on the call are `--amber`
+  semibold, so a judge can follow the numbers without reading every word.
+- **AuditLog:** collapsed to one row under a top border.
+
+**Check at rehearsal:** a dark ground can wash out on a projector in a bright room. If it does,
+swap the token values for a light ground and keep their roles. Don't change the layout. The
+filled Approve is the primary button even over the cap. That was accepted knowingly, and the
+overage in its label is the counterweight.
+
 ## Component contracts
 
 | Component             | Gets                                                               | Owns                          | Calls                                        |
