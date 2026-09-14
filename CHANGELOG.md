@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Versions use the 4-digit `MAJOR.MINOR.PATCH.MICRO` format from `VERSION`.
 
+## [0.2.1.0] - 2026-09-14
+
+### Added
+- **The owner UI has an approved look.** DESIGN.md now sets out the colours, fonts, spacing and component styles for the screen judges watch during the demo, so whoever builds `web/` starts from a decided design instead of picking their own:
+  - It was chosen from three real 1280×720 mockups of the approval moment (a KES 23,000 quote against a KES 20,000 cap).
+  - The chosen look is a dark "Control Room" theme: IBM Plex type, a cyan main action, and amber (always with a text label) for anything that needs your approval.
+  - It also lists what to check on the real projector at rehearsal, and what to change if the dark background washes out.
+
 ## [0.2.0.0] - 2026-09-12
 
 ### Added
