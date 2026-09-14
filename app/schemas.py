@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.states import TxStatus
+
 ServiceKind = Literal["photography", "unsupported"]
 MissingField = Literal["service_date", "location", "max_budget"]
 PolicyStatus = Literal["WITHIN_LIMIT", "REQUIRES_APPROVAL", "NONE"]
@@ -99,7 +101,9 @@ class AuditEventView(BaseModel):
 
 class TransactionView(BaseModel):
     id: str
-    status: str
+    status: TxStatus
+    terminal: bool
+    status_history: list[TxStatus]
     request: str
     service: Literal["photography"]
     service_date: str

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.audit import record_event
 from app.config import Settings
 from app.db import init_db, make_engine
 from app.llm.base import LLMError, LLMProvider, ToolCall
@@ -21,6 +22,7 @@ from app.models import Approval, Negotiation, Offer, Provider, Transaction
 from app.orchestrator import on_call_answered, on_call_ended
 from app.routes.parse import build_parse_router
 from app.routes.transactions import build_transactions_router
+from app.states import TERMINAL_STATES, TxStatus
 from app.telephony.fake import FakeTelephonyProvider
 
 NOW = lambda: datetime(2026, 9, 10, 9, 0, tzinfo=UTC)  # noqa: E731 - 2026-09-10 09:00 UTC = 12:00 Nairobi
@@ -420,6 +422,117 @@ def test_view_includes_the_audit_trail_newest_first():
     body = client.get(f"/transactions/{tx_id}").json()
 
     assert body["audit"][0]["type"] == "transaction.created"
+
+
+# --- status contract for the owner UI (eng review D2, D27) ---------------------------------------
+#
+# The UI must never re-derive the state machine. The view carries the status vocabulary itself:
+#   status          one TxStatus value (published as an enum in /openapi.json)
+#   terminal        status ∈ TERMINAL_STATES, so the poll loop knows when to stop
+#   status_history  every status the transaction has actually been in, oldest first, built from
+#                   status.changed rows and NOT from the 50-event audit list
+
+
+def test_a_new_transaction_has_a_one_entry_history_and_is_not_terminal():
+    app, _, _ = _build_app()
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status_history"] == ["CREATED"]
+    assert body["terminal"] is False
+
+
+def test_status_history_follows_every_transition_in_order():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    _tx_at_result_ready(session_factory, tx_id)
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status_history"] == [
+        "CREATED",
+        "PROVIDER_SELECTED",
+        "CALLING",
+        "NEGOTIATING",
+        "AGREED_WITHIN_POLICY",
+        "RESULT_READY",
+    ]
+    assert body["status_history"][-1] == body["status"]
+
+
+def test_status_history_is_not_truncated_by_the_audit_cap():
+    """A real call writes dozens of non-status events (call.input_received, tool.called, ...).
+    The audit list is capped at 50; the history must still reach back to CREATED."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    with session_factory() as db:
+        for turn in range(60):
+            record_event(db, tx_id, "call.input_received", {"text": f"turn {turn}"})
+        db.commit()
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert len(body["audit"]) == 50
+    assert all(event["type"] != "status.changed" for event in body["audit"])
+    assert body["status_history"][:3] == ["CREATED", "PROVIDER_SELECTED", "CALLING"]
+
+
+def test_a_declined_transaction_is_terminal_and_never_passed_through_confirming():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    _tx_at_result_ready(session_factory, tx_id)
+
+    body = client.post(f"/transactions/{tx_id}/decline").json()
+
+    assert body["terminal"] is True
+    assert body["status_history"][-2:] == ["DECLINED", "CLOSED"]
+    assert "CONFIRMING" not in body["status_history"]
+
+
+@pytest.mark.parametrize("status", list(TxStatus))
+def test_terminal_is_true_exactly_for_the_terminal_states(status):
+    session_factory = _session_factory()
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        db.get(Transaction, tx_id).status = status.value  # direct write: this tests the view only
+        db.commit()
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status"] == status.value
+    assert body["terminal"] is (status in TERMINAL_STATES)
+
+
+def test_openapi_publishes_the_status_enum_for_status_and_status_history():
+    app, _, _ = _build_app()
+    spec = app.openapi()
+    schemas = spec["components"]["schemas"]
+    view = schemas["TransactionView"]["properties"]
+
+    def enum_of(prop: dict) -> set[str]:
+        ref = prop["$ref"].rsplit("/", 1)[-1]
+        return set(schemas[ref]["enum"])
+
+    every_status = {s.value for s in TxStatus}
+    assert enum_of(view["status"]) == every_status
+    assert enum_of(view["status_history"]["items"]) == every_status
+    assert view["terminal"]["type"] == "boolean"
 
 
 # --- POST /parse-request -------------------------------------------------------------------------

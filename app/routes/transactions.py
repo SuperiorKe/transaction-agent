@@ -45,7 +45,7 @@ from app.schemas import (
     TransactionView,
     TranscriptTurnView,
 )
-from app.states import TxStatus
+from app.states import TERMINAL_STATES, TxStatus
 from app.telephony.base import TelephonyProvider
 
 log = logging.getLogger(__name__)
@@ -149,6 +149,19 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         .limit(50)
     ).all()
 
+    # Uncapped and oldest first, from status.changed rows rather than the capped audit list: the
+    # owner UI ticks timeline stages from this, and one real call writes far more than 50 events.
+    status_events = session.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.transaction_id == tx.id, AuditEvent.event_type == "status.changed")
+        .order_by(AuditEvent.id)
+    ).all()
+    if status_events:
+        status_history = [status_events[0].payload["from"]]
+        status_history += [event.payload["to"] for event in status_events]
+    else:
+        status_history = [tx.status]
+
     allowed_actions = list(ALLOWED_ACTIONS_BY_STATUS.get(tx.status, ()))
     if recommendation is None or recommendation.offer_id is None:
         # An escalation reaches AWAITING_APPROVAL even when no price was ever quoted. With no
@@ -158,6 +171,8 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
     return TransactionView(
         id=tx.id,
         status=tx.status,
+        terminal=TxStatus(tx.status) in TERMINAL_STATES,
+        status_history=status_history,
         request=tx.request,
         service=tx.service,
         service_date=tx.service_date,
