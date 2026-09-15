@@ -61,9 +61,11 @@ def make_negotiation_call(
     session, tx, negotiation, llm, *, tools=None, hard_end_seconds=180, now=None
 ) -> NegotiationCall:
     engine = NegotiationEngine(llm, system_prompt="SYSTEM", tools=tools or NoOpTools())
-    kwargs = {"now": now} if now is not None else {}
+    # A fixed clock just after ANSWERED. Defaulting to the real clock made every respond() take the
+    # hard-end path once the wall clock passed ANSWERED + hard_end_seconds (2026-09-14 10:03 UTC).
+    clock = now if now is not None else (lambda: ANSWERED + timedelta(seconds=30))
     return NegotiationCall(
-        session, tx, negotiation, engine, hard_end_seconds=hard_end_seconds, **kwargs
+        session, tx, negotiation, engine, hard_end_seconds=hard_end_seconds, now=clock
     )
 
 
