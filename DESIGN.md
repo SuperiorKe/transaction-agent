@@ -1,7 +1,8 @@
 # Owner UI design (issue #7)
 
 Resolved design decisions for `web/`, the single-page owner UI that judges watch for the whole
-two-minute demo (doc 04 §10). Written before any code exists — `web/` is not yet scaffolded.
+two-minute demo (doc 04 §10). Build step 1 has landed in `web/`: the scaffold, the poll loop,
+`StatusTimeline`, `AuditLog` and the mock fixtures.
 
 Ground truth is **issue #7** on `SuperiorKe/transaction-agent`; this file records the decisions that
 issue left open, and the backend gaps found while resolving them. Where this file and the issue
@@ -86,7 +87,9 @@ request is in flight — a second POST would 409.
 ### 2. `StatusTimeline` collapses 18 statuses into 6 stages
 
 *Deviation from issue #7*, which says "the contract 2 states, current one highlighted". Eighteen
-nodes are not legible at 1280×720. One `STAGE_OF: Record<string, Stage>` map:
+nodes are not legible at 1280×720. The mapping is `STAGE_OF: Record<TxStatus, Stage>` in
+`web/src/stages.ts`. It's keyed by the enum `/openapi.json` publishes, so a new status fails `tsc`
+until it's mapped:
 
 | Stage chip    | `TxStatus` values                                                          |
 | ------------- | -------------------------------------------------------------------------- |
@@ -98,9 +101,11 @@ nodes are not legible at 1280×720. One `STAGE_OF: Record<string, Stage>` map:
 | Done          | `CONFIRMED` (ok) · `DECLINED`/`CLOSED` (closed) · `FAILED` (failed)         |
 
 The current chip is highlighted and the **raw status is printed under the chip row in small text**,
-so a judge sees the shape and a developer sees the precise state. Anything unmapped renders a visible
-"unknown status" rather than a blank chip — a new status in `app/states.py` should be obvious, not
-invisible.
+so a judge sees the shape and a developer sees the precise state. An unmapped status can't reach
+the screen, so there's no "unknown status" chip:
+- `tsc` rejects an incomplete map.
+- A value outside the enum fails the API's response validation. That's a 500, and the poll loop
+  reports three in a row as a server error.
 
 `APPROVED` sits under "Your decision", not "Confirming", while gap 2 stands. Lighting the Confirming
 chip would tell a judge a confirmation call is under way when none is, which is the on-screen form
@@ -118,7 +123,7 @@ and nothing enters `CONFIRM_RETRY_WAIT` in production anyway (gap 3 above). Its 
 already `retry_confirmation`, a manual action. Render the button, not a timer. No new API surface
 for a cosmetic countdown.
 
-### 4. Keep `mock.ts`, for a new reason, and label it on screen
+### 4. Keep fixtures (`web/src/fixtures.ts`), for a new reason, and label them on screen
 
 Issue #7 wanted fixtures because the backend didn't exist. Issue #6 has since closed, so it does.
 Keep them anyway: they are the only way to render `FAILED`, `CONFIRMATION_FAILED`,
@@ -126,7 +131,15 @@ Keep them anyway: they are the only way to render `FAILED`, `CONFIRMATION_FAILED
 calls to the seeded providers.
 
 `?mock=` must **fully short-circuit the network layer** — no polling, no fetches — so that
-developing the UI can never accidentally fire `/start` against live Twilio credentials.
+developing the UI can never accidentally fire `/start` against live Twilio credentials. The
+guarantee is enforced by the code structure:
+- `App` picks its data source once from the URL.
+- `?mock=` wins over `?tx=`. An unknown or empty fixture name is a mock-mode error, never a
+  fallthrough to live.
+- `web/src/boundary.test.ts` fails if `fetch(` appears anywhere except `web/src/api/client.ts`.
+
+Fixtures are named (`?mock=awaiting-approval`) and follow the backend's photography scenario. Each
+one is built from its `status_history`, so its audit trail can't contradict it.
 
 Mock mode shows a fixed, full-width strip reading **"Mock data — not a live call"** that can't be
 dismissed. A fixture's transcript and prices look exactly like a live call's; the project rule for
@@ -151,15 +164,19 @@ progress" forever. Under the timeline, print "last update 2 min ago" from the ne
 ## Page state model
 
 ```
-App
-  ├─ ?mock=S1     → render fixture, no network at all, mock strip visible
-  ├─ ?tx=<id>     → fetch once, then poll
-  └─ neither      → RequestComposer only
+App (web/src/App.tsx) picks a source once from the URL
+  ├─ ?mock=<name>  → fixture, no network at all, mock strip visible (wins over ?tx=)
+  ├─ ?tx=<id>      → poll
+  └─ neither       → empty state (RequestComposer arrives in build step 2)
 
-poll: GET /transactions/{id} every 1000 ms
-  stop when status ∈ {CONFIRMED, CLOSED, FAILED}   (= app/states.py::TERMINAL_STATES)
-  on fetch error: keep the last good view, show a small "reconnecting" marker, keep polling
-  on 404: clear ?tx= and fall back to the composer
+poll (web/src/usePolledTransaction.ts): GET /transactions/{id}, one request at a time; the next
+is scheduled 1000 ms after the previous one settles
+  ok                   replace the view; stop when view.terminal (the server's flag)
+  network error        keep the last good view, "reconnecting" banner, keep polling
+  5xx / non-JSON 200   same, until 3 in a row: "Server error: <detail>", still retrying
+  404                  stop, drop ?tx= from the URL, empty state saying "Transaction not found"
+  other 4xx            stop and show the server's detail (a 422 list is joined into a string)
+  unmount / new id     abort the in-flight request and ignore its result
 ```
 
 Polling over SSE/WebSocket: acceptance criterion 4 only requires a transcript turn to appear within
@@ -237,7 +254,7 @@ Everything needed to build it is below.
 | `--amber-ground` | `rgba(242,180,65,.13)` | ground of the current chip and the approval pill                             |
 | `--amber-edge`   | `#4a3d22`              | RecommendationCard border while an approval is pending                       |
 | `--green`        | `#4ac26b`              | reached-stage ticks, `CONFIRMED`, `WITHIN_LIMIT`                             |
-| `--red`          | `#f47067`              | `FAILED` and unknown-status chips, always with ✕ and a text label            |
+| `--red`          | `#f47067`              | `FAILED` chips and server errors, always with ✕ or a text label              |
 
 **Type:** IBM Plex Sans (400–700) everywhere, with IBM Plex Mono for speaker labels, the raw status,
 the masked phone number and the call stats. Bundle both with the app (for example
@@ -255,13 +272,13 @@ between columns and 12px between cards.
 
 - **StatusTimeline:** six equal chips beside the brand (the product name after a `--muted` dot,
   owned by this component). A chip gets a green ✓ only for a stage the transaction actually
-  reached, read from its `status.changed` audit events, never from the chip's position: `DECLINED`
-  and `CLOSED` skip Confirming, and `FAILED` can follow straight from Request or Calling, so a
-  skipped stage stays `--muted` with no mark. `tx.audit` is capped at 50, so treat every stage
-  before the earliest surviving event as reached. The current chip has an `--amber` border, an
-  `--amber-ground` fill and a ●, except in the terminal Done stage: `CONFIRMED` gets a green ✓,
-  `DECLINED`/`CLOSED` a `--muted` "Closed", and `FAILED` a `--red` ✕ "Failed". An unmapped status
-  gets a `--red` ✕ "unknown status" chip. Future chips are `--muted`. The status line (raw status
+  reached, never from the chip's position. Reached stages come from `tx.status_history`, the
+  server's ordered and uncapped list; the 50-event audit list is too short for a real call.
+  `DECLINED` and `CLOSED` skip Confirming, and `FAILED` can follow straight from Request or
+  Calling, so a skipped stage stays `--muted` with no mark. The current chip has an `--amber`
+  border, an `--amber-ground` fill and a ●, except in the terminal Done stage: `CONFIRMED` gets a
+  green ✓, `DECLINED`/`CLOSED` a `--muted` "Closed", and `FAILED` a `--red` ✕ "Failed". Stages
+  after the current one are `--muted` "upcoming", even if the flow visited them before moving back. The status line (raw status
   in the current chip's colour · "last update …", 13px mono) runs full width under the whole chip
   row, because a status like `AGREED_WITHIN_POLICY` doesn't fit under one chip.
 - **ConstraintCard:** once the transaction exists, a read-only grid of label over value: Service,
@@ -310,7 +327,7 @@ the counterweight.
 | --------------------- | ------------------------------------------------------------------ | ----------------------------- | -------------------------------------------- |
 | `RequestComposer`     | —                                                                  | `text`, `parsing`, `error`    | `POST /parse-request`                        |
 | `ConstraintCard`      | `ParsedRequest`, composer `text`; once created, `tx.service`, `tx.service_date`, `tx.location`, `tx.max_budget`, `tx.max_attempts` | form fields, validity | `POST /transactions` → `POST /{id}/start` |
-| `StatusTimeline`      | `tx.status`, `tx.audit[]` (`status.changed` events for reached stages, `[0].at` for last update) | — | —                                    |
+| `StatusTimeline`      | `tx.status`, `tx.status_history` (reached stages), `tx.audit[0].at` (last update) | — | —                              |
 | `CallPanel`           | latest `kind="negotiation"` entry, `tx.current_provider`, `tx.max_attempts` | ticking timer off `answered_at` | —                                  |
 | `RecommendationCard`  | `tx.recommendation`, `tx.allowed_actions`, `tx.max_budget`, offers | —                             | `POST /{id}/approve` · `/decline`            |
 | `ConfirmationPanel`   | `tx.status`, `tx.allowed_actions`                                  | —                             | `POST /{id}/retry_confirmation` ⚠ route missing |
@@ -348,10 +365,18 @@ Notes:
 
 - `vite.config.ts` proxies `/parse-request`, `/transactions` and `/health` to
   `http://localhost:8000`.
-- FastAPI serves `web/dist/index.html` at `/` and `web/dist/assets` at `/assets`, but only when
-  `web/dist/index.html` exists (`app/main.py`) — so the API runs fine with no UI built. The check
-  runs once, when the app is created: after the first `npm run build`, restart uvicorn (`--reload`
-  only watches Python files), or `/` stays 404.
+- FastAPI serves `web/dist/index.html` at `/` and `web/dist/assets` at `/assets`, checking on every
+  request (`app/main.py`, `create_app(web_dist=...)`). A build made after uvicorn started is served
+  with no restart. A missing build is a 404 saying to run `npm run build`, and the API runs fine
+  without it. `index.html` is sent `Cache-Control: no-cache`, because a rebuild deletes the old
+  hashed assets.
+- The TypeScript API types are generated, never hand-written. `web/openapi.json` is the committed
+  contract (`uv run python -m app.openapi_export`, guarded by a stale-snapshot pytest). `npm test`,
+  `npm run build` and `npm run dev` regenerate `web/src/api/openapi.gen.ts` from it; that file is
+  gitignored.
+- `npm run e2e` (Playwright 1.62.1, 1280×720) builds `web/`, then runs `scripts/e2e_server.py`: a
+  temp SQLite file, no `.env`, `FakeTelephonyProvider`, and a test-only route that calls
+  `transition()`. It checks the served page follows real status changes within 2 s.
 - Owner routes are local-only: `app/middleware.py` 403s anything arriving through the cloudflared
   tunnel (it carries `cf-connecting-ip`) except `/webhooks/*`. The UI is therefore a localhost tool,
   not something to expose publicly.
@@ -360,11 +385,15 @@ Notes:
 ## Build order
 
 1. Scaffold + vite proxy + poll loop + `StatusTimeline` + `AuditLog` — smallest thing that proves
-   the pipe works against an existing transaction.
+   the pipe works against an existing transaction. **Done.** The eng review added the mock data
+   source, five fixtures and the mock strip to this step, so no later step runs against the live
+   API without a safety net.
 2. `RequestComposer` + `ConstraintCard` — makes it usable without curl.
 3. `CallPanel` + `RecommendationCard` — the parts judges actually watch. Lay them out against the
    1280×720 screen above from the start, not as a polish pass.
-4. `mock.ts` covering the nine states in acceptance criterion 2, plus the mock strip.
+4. The remaining fixtures, so `web/src/fixtures.ts` covers all nine states in acceptance criterion
+   2. Step 1 already covers `CREATED`, `NEGOTIATING`, `AWAITING_APPROVAL`, a declined `CLOSED` and
+   `FAILED`, plus the mock strip.
 5. *Backend work, separately:* the `retry_confirmation` route + calling `start_confirmation()` from
    `/approve` (see `TODOS.md`), then `ConfirmationPanel` last, and move `APPROVED` back under the
    Confirming stage.
