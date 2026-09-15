@@ -1,0 +1,202 @@
+/* The owner UI's one stylesheet: DESIGN.md "Visual system" (Control Room), 1280×720 projector. */
+
+:root {
+  --bg: #0d1117;
+  --panel: #151b23;
+  --panel-2: #1b2330;
+  --line: #2a3441;
+  --text: #e6edf3;
+  --muted: #8d9aa8;
+  --accent: #2dd4e6;
+  --accent-ink: #03171b;
+  --amber: #f2b441;
+  --amber-ground: rgba(242, 180, 65, 0.13);
+  --amber-edge: #4a3d22;
+  --green: #4ac26b;
+  --red: #f47067;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 18px;
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 14px 24px;
+}
+
+/* --- StatusTimeline ---------------------------------------------------------------------------- */
+
+.timeline {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 20px;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stage {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-glyph {
+  margin-right: 6px;
+}
+
+.stage[data-mark="reached"] {
+  color: var(--text);
+}
+
+.stage[data-mark="reached"] .stage-glyph {
+  color: var(--green);
+}
+
+.stage[data-mark="current"] {
+  border-color: var(--amber);
+  background: var(--amber-ground);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stage[data-mark="current"] .stage-glyph {
+  color: var(--amber);
+}
+
+.stage[data-outcome="confirmed"] {
+  border-color: var(--green);
+  background: var(--panel);
+}
+
+.stage[data-outcome="confirmed"] .stage-glyph {
+  color: var(--green);
+}
+
+.stage[data-outcome="closed"] {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.stage[data-outcome="failed"],
+.stage[data-outcome="failed"] .stage-glyph {
+  border-color: var(--red);
+  background: var(--panel);
+  color: var(--red);
+}
+
+/* The one small-text element: raw status · last update, full width under the chip row. */
+.status-line {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.status-raw {
+  color: var(--amber);
+}
+
+.status-line[data-outcome="confirmed"] .status-raw {
+  color: var(--green);
+}
+
+.status-line[data-outcome="closed"] .status-raw {
+  color: var(--muted);
+}
+
+.status-line[data-outcome="failed"] .status-raw {
+  color: var(--red);
+}
+
+/* --- AuditLog ---------------------------------------------------------------------------------- */
+
+.audit {
+  margin-top: 16px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.audit-toggle {
+  min-height: 44px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.audit-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 15rem 7rem minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.audit-time,
+.audit-summary,
+.audit-empty {
+  color: var(--muted);
+}
+
+.audit-summary {
+  overflow-wrap: anywhere;
+}
