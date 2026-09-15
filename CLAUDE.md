@@ -25,7 +25,7 @@ unzip -p Transaction_Agent_Hackathon_Document_Pack/<file>.docx word/document.xml
 
 ## Commands
 
-The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System Python 3.14 isn't used. If the shell hasn't activated mise, prefix commands with `mise exec --`.
+The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared, Node 26.8.1). System Python 3.14 isn't used. If the shell hasn't activated mise, prefix commands with `mise exec --`.
 
 | Task | Command |
 |---|---|
@@ -37,6 +37,11 @@ The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System
 | Tests (offline; `sim` marker excluded) | `uv run pytest` |
 | Single test | `uv run pytest tests/test_states.py::test_terminal_states_have_no_outgoing_transitions -q` |
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` |
+| Regenerate the API contract after changing schemas or routes | `uv run python -m app.openapi_export` (commit `web/openapi.json`; a pytest fails when it's stale) |
+| Owner UI deps | `cd web && npm ci` |
+| Owner UI dev server (proxies the API on :8000) | `cd web && npm run dev` |
+| Owner UI tests (regenerate TS types first) | `cd web && npm test` |
+| Build the UI FastAPI serves at `/` (no restart needed) | `cd web && npm run build` |
 | Live Anthropic tests (needs `ANTHROPIC_API_KEY`) | `uv run pytest -m live` |
 | Check `ANTHROPIC_MODEL` is available to your key | `uv run python -m app.llm.anthropic` |
 
