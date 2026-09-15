@@ -42,6 +42,7 @@ The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared, Node 26
 | Owner UI dev server (proxies the API on :8000) | `cd web && npm run dev` |
 | Owner UI tests (regenerate TS types first) | `cd web && npm test` |
 | Build the UI FastAPI serves at `/` (no restart needed) | `cd web && npm run build` |
+| Owner UI end-to-end (builds web/; temp DB, fake telephony, never dials) | `cd web && npm run e2e` |
 | Live Anthropic tests (needs `ANTHROPIC_API_KEY`) | `uv run pytest -m live` |
 | Check `ANTHROPIC_MODEL` is available to your key | `uv run python -m app.llm.anthropic` |
 
