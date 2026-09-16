@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { FetchResult, TransactionView } from "./api/client";
-import { fetchTransaction } from "./api/client";
+import { OFFLINE, fetchTransaction } from "./api/client";
 
 export type PollStatus = "loading" | "ok" | "reconnecting" | "server_error" | "not_found" | "fatal";
 
@@ -16,16 +16,17 @@ export interface PollOptions {
   intervalMs?: number;
 }
 
-// Three identical failures in a row are a server problem, not a blip (eng review D16).
+// Three failures in a row that got an HTTP answer (a 5xx, or a 200 that isn't a transaction) are a
+// server problem, not a blip. Unreachable results (status null: network, gateway, timeout) neither
+// count toward the streak nor reset it; only a successful poll resets it.
 const SERVER_FAILURES_BEFORE_ERROR = 3;
 const INITIAL: PollState = { status: "loading", view: null, detail: null };
-const OFFLINE: FetchResult = { kind: "retryable", status: null, detail: "Can't reach the API" };
 
 /**
- * Poll GET /transactions/{id} one request at a time (D3): the next request is scheduled
- * `intervalMs` after the previous one settles, so a slow response can never be overtaken by an
- * older one. Polling stops when the view is terminal, on 404, or on a fatal 4xx; an id change or
- * unmount aborts the in-flight request and drops whatever it returns.
+ * Poll GET /transactions/{id} one request at a time: the next request is scheduled `intervalMs`
+ * after the previous one settles, so a slow response can never be overtaken by an older one.
+ * Polling stops when the view is terminal, on 404, or on a fatal 4xx. An id change or unmount
+ * aborts the in-flight request and drops whatever it returns.
  */
 export function usePolledTransaction(
   id: string,
@@ -54,10 +55,10 @@ export function usePolledTransaction(
         result = OFFLINE;
       }
       if (controller.signal.aborted) return;
+      // An abort this loop didn't ask for (the browser, an extension) must not stop polling silently.
+      if (result.kind === "aborted") result = OFFLINE;
 
       switch (result.kind) {
-        case "aborted":
-          return;
         case "ok": {
           serverFailures = 0;
           setState({ status: "ok", view: result.view, detail: null });

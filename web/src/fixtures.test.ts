@@ -3,9 +3,17 @@ import { describe, expect, it } from "vitest";
 import { FIXTURES } from "./fixtures";
 
 // Fixtures look exactly like live data, so they must be internally consistent and follow what the
-// backend really does: the photography scenario, KES, masked phone numbers (eng review D30).
+// backend really does: the photography scenario, KES, masked phone numbers.
 
-const TERMINAL = new Set(["CONFIRMED", "CLOSED", "FAILED"]);
+// Explicit per fixture, not a copy of the terminal-status set: a copy would agree with the builder
+// even if both drifted from app/states.py::TERMINAL_STATES.
+const EXPECTED_TERMINAL: Record<string, boolean> = {
+  created: false,
+  negotiating: false,
+  "awaiting-approval": false,
+  declined: true,
+  failed: true,
+};
 const entries = Object.entries(FIXTURES);
 
 describe("FIXTURES", () => {
@@ -21,8 +29,8 @@ describe("FIXTURES", () => {
     expect(view.status_history.at(-1)).toBe(view.status);
   });
 
-  it.each(entries)("%s: terminal matches the terminal states", (_name, view) => {
-    expect(view.terminal).toBe(TERMINAL.has(view.status));
+  it.each(entries)("%s: terminal is what the backend would say for that status", (name, view) => {
+    expect(view.terminal).toBe(EXPECTED_TERMINAL[name]);
   });
 
   it.each(entries)("%s: audit is newest first", (_name, view) => {

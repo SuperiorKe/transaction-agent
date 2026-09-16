@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 // Mock mode must never reach the network, so developing the UI can't dial a real provider through
-// Twilio (eng review D5). The guarantee is structural: only src/api/client.ts may call fetch, and
-// mock pages never construct the live source that uses it. This is the web/ twin of
-// tests/test_architecture.py.
+// Twilio. The guarantee is structural: only src/api/client.ts may call fetch, and mock pages never
+// construct the live source that uses it. This is the web/ twin of tests/test_architecture.py.
 
 const sources = import.meta.glob<string>(
   ["./**/*.{ts,tsx}", "!./**/*.test.{ts,tsx}", "!./**/openapi.gen.ts"],

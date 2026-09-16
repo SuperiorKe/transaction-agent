@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FetchResult, TransactionView } from "./api/client";
 import { usePolledTransaction } from "./usePolledTransaction";
 
-// The poll loop (eng review D3, D4, D16):
+// The poll loop:
 //
 //   fetch now ──settle──► wait intervalMs ──► fetch ──settle──► ...   one request at a time
 //     ok            status "ok", view replaced; stop if view.terminal
@@ -183,6 +183,38 @@ describe("usePolledTransaction", () => {
     for (let i = 0; i < 4; i++) await advance(1000);
 
     expect(result.current.status).toBe("reconnecting");
+  });
+
+  it("treats a fetcher that throws as a network failure and keeps polling", async () => {
+    const fetcher = vi
+      .fn<Fetcher>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ kind: "ok", view: view() });
+    const { result } = renderHook(() => usePolledTransaction("tx-1", { fetcher }));
+
+    await advance(0);
+    expect(result.current).toEqual({ status: "reconnecting", view: null, detail: "Can't reach the API" });
+
+    await advance(1000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.current).toEqual({ status: "ok", view: view(), detail: null });
+  });
+
+  it("keeps polling when a request is aborted by something other than this hook", async () => {
+    const fetcher = scripted(
+      { kind: "ok", view: view() },
+      { kind: "aborted" },
+      { kind: "ok", view: view() },
+    );
+    const { result } = renderHook(() => usePolledTransaction("tx-1", { fetcher }));
+
+    await advance(0);
+    await advance(1000);
+    expect(result.current).toEqual({ status: "reconnecting", view: view(), detail: "Can't reach the API" });
+
+    await advance(1000);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(result.current.status).toBe("ok");
   });
 
   it("stops on 404 and reports not_found", async () => {

@@ -18,9 +18,11 @@ const contractFields: Array<keyof TransactionView> = [
 ];
 
 describe("API contract snapshot", () => {
-  it("publishes all 18 transaction statuses as an enum", () => {
+  // Completeness is stages.test.ts's job (STAGE_OF must cover exactly the published enum), so a new
+  // backend status needs no edit here.
+  it("publishes the transaction statuses as an enum", () => {
     const statuses: readonly string[] = spec.components.schemas.TxStatus.enum;
-    expect(statuses).toHaveLength(18);
+    expect(statuses.length).toBeGreaterThan(0);
     expect(statuses).toContain(created);
   });
 

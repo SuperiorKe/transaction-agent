@@ -6,10 +6,11 @@ import { MockStrip } from "./components/MockStrip";
 import { StatusTimeline } from "./components/StatusTimeline";
 import { FIXTURES } from "./fixtures";
 import { parseSource } from "./source";
+import type { PollStatus } from "./usePolledTransaction";
 import { usePolledTransaction } from "./usePolledTransaction";
 
 /**
- * The data-source seam (eng review D5). The URL picks a source once; components below
+ * The data-source seam. The URL picks a source once; components below
  * TransactionScreen only ever receive a TransactionView and never know where it came from.
  *
  *   ?mock=<fixture>  MockPage   fixtures only; the live poller is never constructed
@@ -89,7 +90,7 @@ function LivePage({ txId }: { txId: string }) {
       )}
       {status === "server_error" && (
         <p className="banner banner-error" role="alert">
-          Server error: {detail} (still retrying)
+          {serverErrorText(detail)}
         </p>
       )}
       <TransactionScreen view={view} />
@@ -97,8 +98,12 @@ function LivePage({ txId }: { txId: string }) {
   );
 }
 
-function loadingMessage(status: string, detail: string | null): string {
-  if (status === "server_error") return `Server error: ${detail} (still retrying)`;
+function serverErrorText(detail: string | null): string {
+  return `Server error: ${detail ?? "unknown"} (still retrying)`;
+}
+
+function loadingMessage(status: PollStatus, detail: string | null): string {
+  if (status === "server_error") return serverErrorText(detail);
   if (status === "reconnecting") return `Reconnecting… ${detail ?? ""}`.trim();
   return "Loading transaction…";
 }

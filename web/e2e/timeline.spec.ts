@@ -4,9 +4,9 @@ import { expect, test } from "@playwright/test";
 // → the timeline follows real transition() calls within 2 s (issue #7 acceptance criteria 1 and 4).
 //
 // scripts/e2e_server.py runs the app on a throwaway SQLite file with FakeTelephonyProvider and no
-// .env (eng review D28). Status changes go through a test-only route that calls app/states.py's
-// transition(), so status.changed rows are written exactly as in production. Nothing here calls
-// /start, so no phone can ring.
+// .env. Status changes go through a test-only route that calls app/states.py's transition(), so
+// status.changed rows are written exactly as in production. Nothing here calls /start, so no phone
+// can ring.
 
 const MOCK_STRIP = "Mock data — not a live call";
 

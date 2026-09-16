@@ -1,7 +1,7 @@
 import type { StageView, TxStatus } from "../stages";
 import { reachedStages } from "../stages";
 import { formatAgo } from "../time";
-import { useTick } from "../useTick";
+import { RELATIVE_TIME_TICK_MS, useTick } from "../useTick";
 
 export interface StatusTimelineProps {
   status: TxStatus;
@@ -10,6 +10,8 @@ export interface StatusTimelineProps {
   lastUpdateAt: string | null;
 }
 
+type Icon = "check" | "dot" | "cross";
+
 const MARK_WORD: Record<StageView["mark"], string> = {
   reached: "reached",
   current: "current",
@@ -17,24 +19,63 @@ const MARK_WORD: Record<StageView["mark"], string> = {
   future: "upcoming",
 };
 
-// Colour is never the only signal (DESIGN.md): every state also has a glyph or a word.
-function chip(stage: StageView): { glyph: string; text: string; state: string } {
+// Colour is never the only signal (DESIGN.md): every state also has an icon or a word.
+function chip(stage: StageView): { icon: Icon | null; text: string; state: string } {
   if (stage.mark === "current" && stage.outcome) {
     switch (stage.outcome) {
+      case "approved":
+        return { icon: "check", text: "Approved", state: "approved" };
       case "confirmed":
-        return { glyph: "✓", text: stage.label, state: "confirmed" };
+        return { icon: "check", text: stage.label, state: "confirmed" };
       case "closed":
-        return { glyph: "", text: "Closed", state: "closed" };
+        return { icon: null, text: "Closed", state: "closed" };
       case "failed":
-        return { glyph: "✕", text: "Failed", state: "failed" };
+        return { icon: "cross", text: "Failed", state: "failed" };
     }
   }
-  const glyph = stage.mark === "reached" ? "✓" : stage.mark === "current" ? "●" : "";
-  return { glyph, text: stage.label, state: MARK_WORD[stage.mark] };
+  const icon = stage.mark === "reached" ? "check" : stage.mark === "current" ? "dot" : null;
+  return { icon, text: stage.label, state: MARK_WORD[stage.mark] };
+}
+
+// Inline SVG rather than ✓ ● ✕ text: IBM Plex doesn't include those glyphs, so text marks would
+// fall back to whatever font the demo laptop has (DESIGN.md "Type").
+function StageIcon({ icon }: { icon: Icon }) {
+  return (
+    <svg
+      className="stage-icon"
+      data-icon={icon}
+      viewBox="0 0 16 16"
+      width="1em"
+      height="1em"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {icon === "check" && (
+        <path
+          d="M3 8.5l3.2 3L13 4.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+      {icon === "dot" && <circle cx="8" cy="8" r="4" fill="currentColor" />}
+      {icon === "cross" && (
+        <path
+          d="M4 4l8 8M12 4l-8 8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
+  );
 }
 
 export function StatusTimeline({ status, statusHistory, lastUpdateAt }: StatusTimelineProps) {
-  useTick(15_000);
+  useTick(RELATIVE_TIME_TICK_MS);
   const stages = reachedStages(status, statusHistory);
   const outcome = stages.find((stage) => stage.mark === "current")?.outcome;
   const ago = lastUpdateAt ? formatAgo(lastUpdateAt, Date.now()) : "";
@@ -47,7 +88,7 @@ export function StatusTimeline({ status, statusHistory, lastUpdateAt }: StatusTi
       </div>
       <ol className="stages">
         {stages.map((stage) => {
-          const { glyph, text, state } = chip(stage);
+          const { icon, text, state } = chip(stage);
           return (
             <li
               key={stage.stage}
@@ -56,11 +97,7 @@ export function StatusTimeline({ status, statusHistory, lastUpdateAt }: StatusTi
               data-outcome={stage.outcome}
               aria-label={`${stage.label}: ${state}`}
             >
-              {glyph && (
-                <span className="stage-glyph" aria-hidden="true">
-                  {glyph}
-                </span>
-              )}
+              {icon && <StageIcon icon={icon} />}
               {text}
             </li>
           );

@@ -3,7 +3,7 @@
     uv run python -m app.openapi_export
 
 The app is built offline with no .env and FakeTelephonyProvider, so the snapshot depends only on
-the code. tests/test_openapi_snapshot.py fails when the committed file is stale (eng review D2).
+the code. tests/test_openapi_snapshot.py fails when the committed file is stale.
 """
 
 import json

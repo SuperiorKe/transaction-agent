@@ -14,6 +14,10 @@
   --amber-edge: #4a3d22;
   --green: #4ac26b;
   --red: #f47067;
+
+  /* Native scrollbars and future form controls follow the dark ground instead of the light default. */
+  color-scheme: dark;
+  scrollbar-color: var(--line) var(--bg);
 }
 
 * {
@@ -39,6 +43,13 @@ code {
   max-width: 1280px;
   margin: 0 auto;
   padding: 14px 24px;
+}
+
+/* Keyboard focus is themed, never removed. Not --accent: DESIGN.md reserves it for Approve. */
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
 }
 
 /* --- StatusTimeline ---------------------------------------------------------------------------- */
@@ -76,6 +87,9 @@ code {
 }
 
 .stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -87,15 +101,15 @@ code {
   text-overflow: ellipsis;
 }
 
-.stage-glyph {
-  margin-right: 6px;
+.stage-icon {
+  flex: none;
 }
 
 .stage[data-mark="reached"] {
   color: var(--text);
 }
 
-.stage[data-mark="reached"] .stage-glyph {
+.stage[data-mark="reached"] .stage-icon {
   color: var(--green);
 }
 
@@ -106,16 +120,18 @@ code {
   font-weight: 600;
 }
 
-.stage[data-mark="current"] .stage-glyph {
+.stage[data-mark="current"] .stage-icon {
   color: var(--amber);
 }
 
+.stage[data-outcome="approved"],
 .stage[data-outcome="confirmed"] {
   border-color: var(--green);
   background: var(--panel);
 }
 
-.stage[data-outcome="confirmed"] .stage-glyph {
+.stage[data-outcome="approved"] .stage-icon,
+.stage[data-outcome="confirmed"] .stage-icon {
   color: var(--green);
 }
 
@@ -126,7 +142,7 @@ code {
 }
 
 .stage[data-outcome="failed"],
-.stage[data-outcome="failed"] .stage-glyph {
+.stage[data-outcome="failed"] .stage-icon {
   border-color: var(--red);
   background: var(--panel);
   color: var(--red);
@@ -145,6 +161,7 @@ code {
   color: var(--amber);
 }
 
+.status-line[data-outcome="approved"] .status-raw,
 .status-line[data-outcome="confirmed"] .status-raw {
   color: var(--green);
 }
@@ -166,6 +183,9 @@ code {
 }
 
 .audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   min-height: 44px;
   padding: 4px 0;
   border: 0;
@@ -173,6 +193,10 @@ code {
   color: var(--muted);
   font: inherit;
   cursor: pointer;
+}
+
+.audit-toggle:hover {
+  color: var(--text);
 }
 
 .audit-rows {
@@ -183,9 +207,11 @@ code {
   overflow-y: auto;
 }
 
+/* The type column sizes to its longest entry (e.g. confirmation.retry_scheduled), so it never runs
+   into the time column. */
 .audit-row {
   display: grid;
-  grid-template-columns: 15rem 7rem minmax(0, 1fr);
+  grid-template-columns: max-content 7rem minmax(0, 1fr);
   gap: 12px;
   padding: 4px 0;
   border-bottom: 1px solid var(--line);
@@ -230,6 +256,11 @@ code {
 .notice a,
 .fixture-links a {
   color: var(--text);
+}
+
+.notice a:hover,
+.fixture-links a:hover {
+  color: var(--green);
 }
 
 .fixture-links {

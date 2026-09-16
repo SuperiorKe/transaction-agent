@@ -33,6 +33,16 @@ log = logging.getLogger(__name__)
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
+_INDEX_HEADERS = {
+    # Assets are content-hashed and a rebuild deletes the old ones, so a cached index.html would
+    # point at files that no longer exist.
+    "Cache-Control": "no-cache",
+    # The owner page will carry Start and Approve buttons: no other site may frame it.
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+}
+
 
 class _BuiltAssets(StaticFiles):
     """StaticFiles for web/dist/assets that is a 404 until the first build, not a 500.
@@ -148,9 +158,7 @@ def create_app(
             return PlainTextResponse(
                 "The owner UI isn't built yet. Run `npm run build` in web/.", status_code=404
             )
-        # Assets are content-hashed and a rebuild deletes the old ones, so a cached index.html
-        # would point at files that no longer exist.
-        return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
+        return FileResponse(index_html, headers=_INDEX_HEADERS)
 
     return app
 

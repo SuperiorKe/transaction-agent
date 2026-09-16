@@ -4,13 +4,14 @@ export type TxStatus = components["schemas"]["TxStatus"];
 
 export type Stage = "request" | "calling" | "negotiating" | "decision" | "confirming" | "done";
 export type StageMark = "reached" | "current" | "skipped" | "future";
-export type DoneOutcome = "confirmed" | "closed" | "failed";
+/** A settled current stage: "Approved" under Your decision, or how the Done stage ended. */
+export type StageOutcome = "approved" | "confirmed" | "closed" | "failed";
 
 export interface StageView {
   stage: Stage;
   label: string;
   mark: StageMark;
-  outcome?: DoneOutcome;
+  outcome?: StageOutcome;
 }
 
 export const STAGES: readonly { stage: Stage; label: string }[] = [
@@ -24,8 +25,8 @@ export const STAGES: readonly { stage: Stage; label: string }[] = [
 
 // DESIGN.md decision 2. A Record keyed by the generated TxStatus union, so a status added in
 // app/states.py fails `tsc` here until it's given a stage. APPROVED stays under "Your decision"
-// while /approve starts no confirmation call (gap 2): lighting Confirming would claim a call that
-// isn't happening.
+// (shown as done: "Approved") while /approve starts no confirmation call: lighting Confirming
+// would claim a call that isn't happening.
 export const STAGE_OF: Record<TxStatus, Stage> = {
   CREATED: "request",
   PROVIDER_SELECTED: "calling",
@@ -47,7 +48,8 @@ export const STAGE_OF: Record<TxStatus, Stage> = {
   FAILED: "done",
 };
 
-const DONE_OUTCOME: Partial<Record<TxStatus, DoneOutcome>> = {
+const OUTCOME_OF: Partial<Record<TxStatus, StageOutcome>> = {
+  APPROVED: "approved",
   CONFIRMED: "confirmed",
   DECLINED: "closed",
   CLOSED: "closed",
@@ -58,7 +60,8 @@ const DONE_OUTCOME: Partial<Record<TxStatus, DoneOutcome>> = {
  * Mark each timeline stage from the server's uncapped status_history, never from chip position:
  *
  *   index <  current   reached if some status in the history maps to it, otherwise skipped
- *   index == current   current (the Done stage also carries confirmed / closed / failed)
+ *   index == current   current (with an outcome when the status settles it: approved, confirmed,
+ *                      closed, failed)
  *   index >  current   future, even if visited before the flow moved back a stage
  *
  * So a declined deal shows Confirming as skipped, not "Confirming ✓".
@@ -70,7 +73,7 @@ export function reachedStages(status: TxStatus, history: readonly TxStatus[]): S
 
   return STAGES.map(({ stage, label }, index): StageView => {
     if (index === currentIndex) {
-      const outcome = stage === "done" ? DONE_OUTCOME[status] : undefined;
+      const outcome = OUTCOME_OF[status];
       return outcome ? { stage, label, mark: "current", outcome } : { stage, label, mark: "current" };
     }
     if (index > currentIndex) return { stage, label, mark: "future" };

@@ -1,4 +1,4 @@
-"""The built owner UI is served from web/dist, checked on every request (eng review D6, D18, D22).
+"""The built owner UI is served from web/dist, checked on every request.
 
 A build made after uvicorn started must be served without a restart, a missing build is a helpful
 404 (never a 500), and index.html is never cached so a rebuild can't leave a blank page. Every test
@@ -73,6 +73,10 @@ def test_root_serves_index_html_and_forbids_caching_it(tmp_path):
     assert response.status_code == 200
     assert "owner ui marker" in response.text
     assert response.headers["cache-control"] == "no-cache"
+    # The page will carry Start and Approve buttons, so it must never be framed by another site.
+    assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
 
 def test_a_build_made_after_the_app_started_is_served_without_a_restart(tmp_path):
@@ -118,13 +122,13 @@ def test_the_api_still_works_with_no_ui_built(tmp_path):
 
 
 def test_create_app_dials_through_an_injected_telephony_provider(tmp_path):
-    """The Playwright E2E server runs on FakeTelephonyProvider, so it can't reach Twilio (D28)."""
+    """The Playwright E2E server runs on FakeTelephonyProvider, so it can't reach Twilio."""
     telephony = FakeTelephonyProvider()
     session_factory = _in_memory_session_factory()
     with session_factory() as db:
         db.add(
             Provider(
-                name="Studio A", phone="+254712345678", location="Nairobi", priority=1, active=True
+                name="Studio A", phone="+254100000678", location="Nairobi", priority=1, active=True
             )
         )
         db.commit()
@@ -151,4 +155,4 @@ def test_create_app_dials_through_an_injected_telephony_provider(tmp_path):
     response = client.post(f"/transactions/{tx['id']}/start")
 
     assert response.status_code == 202
-    assert telephony.placed_calls == ["+254712345678"]
+    assert telephony.placed_calls == ["+254100000678"]

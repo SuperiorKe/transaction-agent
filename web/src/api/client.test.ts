@@ -1,17 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchTransaction, normaliseDetail } from "./client";
+import { REQUEST_TIMEOUT_MS, fetchTransaction, normaliseDetail } from "./client";
 import type { TransactionView } from "./client";
 
-// client.ts is the ONLY module allowed to call fetch (eng review D5). It turns every HTTP outcome
-// into one of five kinds the poll loop understands (D4, D16, D19, D21):
-//   ok          200 with a parsed TransactionView
+// client.ts is the ONLY module allowed to call fetch. It turns every HTTP outcome into one of five
+// kinds the poll loop understands:
+//   ok          200 with something shaped like a TransactionView
 //   not_found   404, so the page drops ?tx= and shows the empty state
-//   retryable   network failure, 5xx, or a 200 whose body isn't JSON: keep polling
+//   retryable   5xx or a bad 200 (status set); network, 502/503/504 or timeout (status null)
 //   fatal       any other 4xx (403 through the tunnel included): stop and show `detail`
 //   aborted     the caller cancelled; not an error
 
-const VIEW = { id: "tx-1", status: "CREATED" } as unknown as TransactionView;
+const VIEW = {
+  id: "tx-1",
+  status: "CREATED",
+  terminal: false,
+  status_history: ["CREATED"],
+  audit: [],
+} as unknown as TransactionView;
 
 function respond(status: number, body: unknown, { json = true } = {}) {
   const text = json ? JSON.stringify(body) : String(body);
@@ -31,14 +37,64 @@ describe("fetchTransaction", () => {
     expect(result).toEqual({ kind: "ok", view: VIEW });
   });
 
-  it("requests the URL-encoded id and passes the abort signal through", async () => {
+  it("requests the URL-encoded id with a signal the caller's abort reaches", async () => {
     const fetchMock = respond(200, VIEW);
     vi.stubGlobal("fetch", fetchMock);
-    const signal = new AbortController().signal;
+    const caller = new AbortController();
 
-    await fetchTransaction("a/b c", signal);
+    await fetchTransaction("a/b c", caller.signal);
 
-    expect(fetchMock).toHaveBeenCalledWith("/transactions/a%2Fb%20c", { signal });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/transactions/a%2Fb%20c");
+    const passed = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.signal;
+    expect(passed?.aborted).toBe(false);
+  });
+
+  it("treats a 200 that isn't shaped like a transaction as a failed poll, not a view", async () => {
+    vi.stubGlobal("fetch", respond(200, { id: "tx-1", status: "CREATED" }));
+
+    expect(await fetchTransaction("tx-1", new AbortController().signal)).toEqual({
+      kind: "retryable",
+      status: 200,
+      detail: "The API sent a response that isn't a transaction",
+    });
+  });
+
+  it.each([502, 503, 504])("maps gateway status %i to unreachable, not a server error", async (status) => {
+    vi.stubGlobal("fetch", respond(status, "API unreachable", { json: false }));
+
+    expect(await fetchTransaction("tx-1", new AbortController().signal)).toEqual({
+      kind: "retryable",
+      status: null,
+      detail: "Can't reach the API",
+    });
+  });
+
+  it("gives up after REQUEST_TIMEOUT_MS and reports the API as unreachable", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (_input: RequestInfo | URL, init?: RequestInit) =>
+            new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("The operation was aborted.", "AbortError")),
+              );
+            }),
+        ),
+      );
+
+      const pending = fetchTransaction("tx-1", new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+
+      expect(await pending).toEqual({
+        kind: "retryable",
+        status: null,
+        detail: "The API didn't answer within 5 s",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("maps 404 to not_found", async () => {
@@ -49,7 +105,7 @@ describe("fetchTransaction", () => {
     });
   });
 
-  it.each([500, 502, 503])("maps %i to retryable with the server's detail", async (status) => {
+  it.each([500, 501])("maps %i to retryable with the server's detail", async (status) => {
     vi.stubGlobal("fetch", respond(status, { detail: "database is locked" }));
 
     expect(await fetchTransaction("tx-1", new AbortController().signal)).toEqual({
@@ -57,6 +113,30 @@ describe("fetchTransaction", () => {
       status,
       detail: "database is locked",
     });
+  });
+
+  it("maps a 5xx whose body isn't JSON (uvicorn's plain-text 500) to retryable with a fallback detail", async () => {
+    vi.stubGlobal("fetch", respond(500, "Internal Server Error", { json: false }));
+
+    expect(await fetchTransaction("tx-1", new AbortController().signal)).toEqual({
+      kind: "retryable",
+      status: 500,
+      detail: "Request failed (500)",
+    });
+  });
+
+  it("returns aborted when the caller cancels while the body is being read", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const response = new Response(JSON.stringify(VIEW), { status: 200 });
+        controller.abort();
+        return response;
+      }),
+    );
+
+    expect(await fetchTransaction("tx-1", controller.signal)).toEqual({ kind: "aborted" });
   });
 
   it("maps a network failure to retryable with no status", async () => {
@@ -125,5 +205,10 @@ describe("normaliseDetail", () => {
     expect(normaliseDetail("not json", 400)).toBe("Request failed (400)");
     expect(normaliseDetail({ detail: [{ nope: true }] }, 422)).toBe("Request failed (422)");
     expect(normaliseDetail(null, 500)).toBe("Request failed (500)");
+  });
+
+  it("falls back to the status for an empty string or an empty validation list", () => {
+    expect(normaliseDetail({ detail: "" }, 400)).toBe("Request failed (400)");
+    expect(normaliseDetail({ detail: [] }, 422)).toBe("Request failed (422)");
   });
 });

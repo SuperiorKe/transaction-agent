@@ -5,7 +5,7 @@ import type { AuditEvent } from "./AuditLog";
 import { AuditLog } from "./AuditLog";
 
 // Collapsed by default; rows show the raw event type, relative time and a short payload summary.
-// No friendly-label map, so a new event type in app/audit.py needs no UI change (eng review D9).
+// No friendly-label map, so a new event type in app/audit.py needs no UI change.
 
 const EVENTS: AuditEvent[] = [
   {
@@ -83,6 +83,18 @@ describe("AuditLog", () => {
     expect(created?.textContent).toContain("request=Photographer for Monday in Nairobi.");
     expect(created?.textContent).toContain("…");
     expect(created?.textContent).not.toContain("without my approval");
+  });
+
+  it("says 'latest 50' when the list is at the API's cap, since older events were dropped", () => {
+    const fifty = Array.from({ length: 50 }, (_, index) => ({
+      type: "call.input_received",
+      payload: { text: `turn ${index}` },
+      at: "2026-09-14T08:59:00Z",
+    }));
+
+    render(<AuditLog events={fifty} />);
+
+    expect(toggle().textContent).toContain("Audit log · latest 50 events");
   });
 
   it("uses the singular for one event and says so when there are none", () => {

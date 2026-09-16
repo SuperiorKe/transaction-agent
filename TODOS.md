@@ -45,6 +45,18 @@ The outside-voice review also suspects that once `record_offer` flushes, a SQLit
 **Priority:** P1
 **Depends on:** None; must land before owner UI build step 3 (CallPanel)
 
+### Check Host and Origin on owner routes (DNS rebinding can place real calls)
+
+**What:** Owner routes should accept only a local `Host` (`localhost`, `127.0.0.1`, `[::1]`, with a port). `/webhooks/*` keeps accepting the tunnel host. POSTs with a foreign `Origin` should be rejected.
+
+**Why:** `app/middleware.py` treats any request without `cf-connecting-ip` as local. A `/ship` adversarial probe got `POST /transactions` with `Host: attacker.example` → 201, and a cross-origin form POST to `/transactions/{id}/start` → 202, which dials. A page using DNS rebinding in the owner's browser could create and start transactions while the API runs, placing real paid Twilio calls, capped only by `max_calls_per_day`.
+
+**Context:** Found by the `/ship` review of owner UI build step 1 (2026-09-16). This predates the owner UI; the UI only makes the browser the main client. Starlette's `TrustedHostMiddleware` covers the Host half, but it applies to every path, so it must exempt `/webhooks/*` or live inside `LocalOnlyOwnerRoutes`. The existing tests use `TestClient`'s default `testserver` host, so they need an allowed test host. Add tests for foreign Host, foreign Origin, local Origin and tunnel webhooks.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** None; must land before owner UI build step 2 (the Start button)
+
 ### Distinguish STT failures from caller silence in the audit trail
 
 **What:** `AfricasTalkingVoiceProvider._transcribe` swallows any speech-to-text exception (auth, network, quota) and returns `""`, which `CallCoordinator` then treats as ordinary caller silence. `app/audit.py`'s `EVENT_TYPES` has no distinct type for it, and no new module in this diff calls `record_event` at all yet.
@@ -56,6 +68,18 @@ The outside-voice review also suspects that once `record_offer` flushes, a SQLit
 **Effort:** M
 **Priority:** P2
 **Depends on:** Issue #6
+
+### Keep Twilio's error code and message when a call request fails
+
+**What:** In `app/telephony/twilio.py`, add Twilio's JSON `code` and `message` from a 4xx body to the `TelephonyError` text, redacting any E.164 number. Don't retry non-retryable 4xx responses in `place_call`.
+
+**Why:** Today the adapter keeps only `f"Twilio call request failed: HTTP {exc.response.status_code}"`, and the orchestrator audits that string. CLAUDE.md warns about the likeliest demo-day failure: the trial account rejects an unverified destination number. When that happens, the owner UI's audit log shows `HTTP 400` twice, then the timeline lands on Failed, with nothing saying why.
+
+**Context:** Found by the `/ship` red team on owner UI build step 1 (2026-09-16). This predates the owner UI; the audit log just makes the gap visible. Twilio 4xx bodies are JSON with `code`, `message` and `more_info`. Code 21219 is "unverified number" on trial accounts.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
 
 ### Expose the confirmation half of the state machine over HTTP
 
@@ -138,11 +162,35 @@ only show "last update N min ago" (DESIGN.md decision 6).
 
 **Why:** PR #20 bumped `VERSION` to `0.2.1.0`, but `pyproject.toml` still says `0.2.0` (so does `uv.lock`), and `/openapi.json` reports `0.1.0`. With `web/package.json` that's three drifting version fields, and it's unclear which build is on the demo laptop.
 
-**Context:** Found by `/plan-eng-review` of owner UI build step 1 (2026-09-14). `/ship`'s `gstack-version-bump` only syncs `package.json`, and it can't run here without `bun`. A pyproject bump needs `uv lock` afterwards. The committed `web/openapi.json` snapshot will carry the FastAPI version, so fixing this regenerates it.
+**Context:** Found by `/plan-eng-review` of owner UI build step 1 (2026-09-14). `/ship`'s `gstack-version-bump` only syncs `package.json`, and it can't run here without `bun`. A pyproject bump needs `uv lock` afterwards. The committed `web/openapi.json` already carries the FastAPI version (`0.1.0`), so fixing this means regenerating it with `uv run python -m app.openapi_export`.
 
 **Effort:** S
 **Priority:** P3
 **Depends on:** Owner UI build step 1 (web/package.json exists)
+
+### Index audit_events for the per-poll status history
+
+**What:** Add `Index("ix_audit_tx_type", AuditEvent.transaction_id, AuditEvent.event_type)` in `app/models.py`, then delete `transaction_agent.db` and re-seed. There are no migrations, and `create_all` won't add an index to an existing table.
+
+**Why:** `_build_view` now reads a transaction's `status.changed` rows on every 1-second poll. `audit_events` has no index on either column, and SQLite doesn't index foreign keys automatically, so each poll scans the whole table. That's negligible at demo scale (a few thousand rows), but grows with every rehearsal left in the file.
+
+**Context:** Found by the `/ship` performance specialist and adversarial pass on owner UI build step 1 (2026-09-16). The owner chose to defer it, to avoid a DB reset mid-build.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** A good moment to reset the local database
+
+### Move test phone numbers out of the +2547 range
+
+**What:** Change `tests/test_orchestrator.py`'s `+25471100000x` provider numbers to the `+2541…` range that CLAUDE.md prescribes.
+
+**Why:** #9's pre-publish secret check greps for `+2547\d{8}`, and these fake numbers match it. The check can't pass cleanly while they're there.
+
+**Context:** Found while fixing the same problem in `tests/test_api.py` and `tests/test_main_web.py` during the `/ship` of owner UI build step 1 (2026-09-16). `app/routes/transactions.py::_mask_phone`'s docstring example (`'+254712345678'`) is documentation; decide whether #9's check should skip it.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
 
 ## Docs
 

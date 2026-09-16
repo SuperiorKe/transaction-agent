@@ -2,7 +2,7 @@ import type { TransactionView } from "./api/client";
 import type { TxStatus } from "./stages";
 
 // Fixture data for ?mock= pages. It follows what the backend actually does: the photography
-// scenario from CLAUDE.md, KES, masked phone numbers in the +2541 test range (eng review D30).
+// scenario from CLAUDE.md, KES, masked phone numbers in the +2541 test range.
 // Every fixture is built by transaction(), which derives `terminal` and the status.changed audit
 // trail from `status_history`, so a fixture can't contradict itself. src/fixtures.test.ts checks.
 

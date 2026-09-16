@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
@@ -31,7 +31,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("App: mock mode (eng review D5, D24)", () => {
+describe("App: mock mode", () => {
   it("renders a fixture under the permanent mock strip without touching the network", () => {
     const fetchSpy = forbidNetwork();
 
@@ -106,5 +106,74 @@ describe("App: live mode", () => {
     render(<App search="?tx=tx-live" />);
 
     expect(await screen.findByText(/Owner routes are local only/)).toBeTruthy();
+  });
+});
+
+describe("App: live mode while the API is failing", () => {
+  const SERVER_ERROR = { detail: "database is locked" };
+
+  function serveSequence(...replies: Array<[number, unknown] | "offline">) {
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify(SERVER_ERROR), { status: 500 })),
+    );
+    for (const reply of replies) {
+      if (reply === "offline") fetchSpy.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      else fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify(reply[1]), { status: reply[0] }));
+    }
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("before any view: loading, then reconnecting, then a server error, never a blank page", async () => {
+    serveSequence([500, SERVER_ERROR], [500, SERVER_ERROR], [500, SERVER_ERROR]);
+
+    render(<App search="?tx=tx-live" />);
+    expect(screen.getByRole("status").textContent).toBe("Loading transaction…");
+
+    await advance(0);
+    expect(screen.getByRole("status").textContent).toBe("Reconnecting… database is locked");
+
+    await advance(1000);
+    await advance(1000);
+    expect(screen.getByRole("status").textContent).toBe("Server error: database is locked (still retrying)");
+  });
+
+  it("with a view: keeps the timeline under a reconnecting banner, then a server error alert", async () => {
+    serveSequence(
+      [200, FIXTURES["awaiting-approval"]],
+      "offline",
+      [500, SERVER_ERROR],
+      [500, SERVER_ERROR],
+      [500, SERVER_ERROR],
+    );
+
+    render(<App search="?tx=tx-live" />);
+    await advance(0);
+    expect(screen.getByRole("listitem", { name: "Your decision: current" })).toBeTruthy();
+    expect(screen.queryByText(/Reconnecting/)).toBeNull();
+
+    await advance(1000);
+    expect(screen.getByText("Reconnecting… showing the last update")).toBeTruthy();
+    expect(screen.getByRole("listitem", { name: "Your decision: current" })).toBeTruthy();
+
+    await advance(3000);
+    expect(screen.getByRole("alert").textContent).toBe("Server error: database is locked (still retrying)");
+    expect(screen.queryByText(/Reconnecting/)).toBeNull();
+    expect(screen.getByRole("listitem", { name: "Your decision: current" })).toBeTruthy();
   });
 });

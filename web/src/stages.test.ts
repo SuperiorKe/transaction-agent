@@ -5,10 +5,10 @@ import type { TxStatus } from "./stages";
 import { STAGES, STAGE_OF, reachedStages } from "./stages";
 
 // The timeline collapses 18 statuses into 6 stages (DESIGN.md decision 2). A stage is ticked only
-// if the transaction was really in it, according to the server's uncapped status_history (D27);
-// it is never inferred from position. Marks per stage:
+// if the transaction was really in it, according to the server's uncapped status_history; it is
+// never inferred from position. Marks per stage:
 //   reached   the transaction passed through this stage
-//   current   the stage of `status` (Done also carries confirmed / closed / failed)
+//   current   the stage of `status`, with an outcome when settled (approved / confirmed / closed / failed)
 //   skipped   before the current stage but never visited, e.g. Confirming on a decline
 //   future    after the current stage, including stages visited before moving back a stage
 
@@ -82,14 +82,14 @@ describe("reachedStages", () => {
       },
     ],
     [
-      "approved, with no confirmation call wired yet",
+      "approved, with no confirmation call wired yet: shown as done 'Approved'",
       "APPROVED",
       ["CREATED", "PROVIDER_SELECTED", "CALLING", "NEGOTIATING", "AGREED_WITHIN_POLICY", "RESULT_READY", "APPROVED"],
       {
         request: "reached",
         calling: "reached",
         negotiating: "reached",
-        decision: "current",
+        decision: "current:approved",
         confirming: "future",
         done: "future",
       },

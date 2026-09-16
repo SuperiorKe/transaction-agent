@@ -70,7 +70,7 @@ def _build_app(
 
 def _seed_provider(session_factory, **overrides) -> Provider:
     values = dict(
-        name="Studio A", phone="+254712345678", location="Nairobi", priority=1, active=True
+        name="Studio A", phone="+254100000678", location="Nairobi", priority=1, active=True
     )
     values.update(overrides)
     with session_factory() as db:
@@ -164,8 +164,8 @@ def test_start_places_a_call_and_masks_the_provider_phone():
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "CALLING"
-    assert body["current_provider"]["phone_masked"] == "+254 7•• ••• 678"
-    assert telephony.placed_calls == ["+254712345678"]
+    assert body["current_provider"]["phone_masked"] == "+254 1•• ••• 678"
+    assert telephony.placed_calls == ["+254100000678"]
     assert len(body["negotiations"]) == 1
 
 
@@ -424,7 +424,7 @@ def test_view_includes_the_audit_trail_newest_first():
     assert body["audit"][0]["type"] == "transaction.created"
 
 
-# --- status contract for the owner UI (eng review D2, D27) ---------------------------------------
+# --- status contract for the owner UI ------------------------------------------------------------
 #
 # The UI must never re-derive the state machine. The view carries the status vocabulary itself:
 #   status          one TxStatus value (published as an enum in /openapi.json)

@@ -172,8 +172,10 @@ App (web/src/App.tsx) picks a source once from the URL
 poll (web/src/usePolledTransaction.ts): GET /transactions/{id}, one request at a time; the next
 is scheduled 1000 ms after the previous one settles
   ok                   replace the view; stop when view.terminal (the server's flag)
-  network error        keep the last good view, "reconnecting" banner, keep polling
-  5xx / non-JSON 200   same, until 3 in a row: "Server error: <detail>", still retrying
+  unreachable          network error, 502/503/504, or no answer in 5 s: keep the last good
+                       view, "reconnecting" banner, keep polling
+  5xx / bad 200        same, until 3 in a row: "Server error: <detail>", still retrying
+                       (a 200 that isn't shaped like a transaction counts as a bad 200)
   404                  stop, drop ?tx= from the URL, empty state saying "Transaction not found"
   other 4xx            stop and show the server's detail (a 422 list is joined into a string)
   unmount / new id     abort the in-flight request and ignore its result
@@ -369,12 +371,14 @@ Notes:
   request (`app/main.py`, `create_app(web_dist=...)`). A build made after uvicorn started is served
   with no restart. A missing build is a 404 saying to run `npm run build`, and the API runs fine
   without it. `index.html` is sent `Cache-Control: no-cache`, because a rebuild deletes the old
-  hashed assets.
+  hashed assets. It is also sent `frame-ancestors 'none'`, `X-Frame-Options: DENY` and `nosniff`,
+  because the page will carry Start and Approve buttons.
 - The TypeScript API types are generated, never hand-written. `web/openapi.json` is the committed
   contract (`uv run python -m app.openapi_export`, guarded by a stale-snapshot pytest). `npm test`,
   `npm run build` and `npm run dev` regenerate `web/src/api/openapi.gen.ts` from it; that file is
   gitignored.
-- `npm run e2e` (Playwright 1.62.1, 1280×720) builds `web/`, then runs `scripts/e2e_server.py`: a
+- `npm run e2e` (Playwright 1.62.1, 1280×720) builds `web/dist-e2e` (never the `web/dist` a
+  running demo serves), then runs `scripts/e2e_server.py`: a
   temp SQLite file, no `.env`, `FakeTelephonyProvider`, and a test-only route that calls
   `transition()`. It checks the served page follows real status changes within 2 s.
 - Owner routes are local-only: `app/middleware.py` 403s anything arriving through the cloudflared
