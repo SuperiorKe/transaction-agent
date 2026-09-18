@@ -71,6 +71,67 @@ def test_owner_route_with_a_malformed_loopback_port_is_forbidden(client, host):
     assert client.get("/health", headers={"host": host}).status_code == 403
 
 
+@pytest.mark.parametrize("peer", ["127.0.0.1", "::1"])
+async def test_owner_route_with_a_loopback_peer_and_matching_host_passes(peer):
+    """A real (non-TestClient) loopback peer, e.g. uvicorn's default bind, must pass even though
+    it isn't the "testclient" sentinel."""
+    sent: list[dict] = []
+
+    async def health(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health",
+        "headers": [(b"host", b"localhost")],
+        "client": (peer, 54321),
+    }
+    await LocalOnlyOwnerRoutes(health)(scope, None, send)
+
+    assert sent[0]["status"] == 200
+
+
+async def test_owner_route_with_a_non_loopback_peer_is_forbidden_even_with_a_loopback_host():
+    """The header checks alone would pass this request (Host: localhost, no tunnel header, no
+    Origin) -- only the ASGI-reported peer address catches it. This is exactly the scenario the
+    header checks can't cover on their own: the server bound to 0.0.0.0 and a real LAN peer sent a
+    spoofed Host."""
+    sent: list[dict] = []
+
+    async def never_called(scope, receive, send):  # pragma: no cover
+        raise AssertionError("a non-loopback peer reached the app despite a loopback Host header")
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health",
+        "headers": [(b"host", b"localhost")],
+        "client": ("192.168.1.42", 54321),
+    }
+    await LocalOnlyOwnerRoutes(never_called)(scope, None, send)
+
+    assert sent[0]["status"] == 403
+
+
+async def test_owner_route_with_a_non_loopback_peer_is_forbidden_through_the_real_app(client):
+    """Same check, driven through the app's real ASGI transport instead of a hand-built scope --
+    httpx's ASGITransport lets a test override `client` directly."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=client.app, client=("203.0.113.9", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as direct:
+        response = await direct.get("/health", headers={"host": "localhost"})
+    assert response.status_code == 403
+
+
 def test_is_loopback_host_rejects_a_non_ascii_digit_port():
     # str.isdigit() is true for non-ASCII digit characters (e.g. superscript two, '\xb2'); no real
     # HTTP client can even send one as a Host header (httpx itself refuses to encode it), but the
