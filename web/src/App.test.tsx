@@ -297,7 +297,9 @@ describe("App: live mode decisions", () => {
     const fetchMock = serveWithOverride("/approve", 202, FIXTURES["awaiting-approval"]);
 
     render(<App search="?tx=tx-live" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve KES 23,000 · KES 3,000 over your cap" }),
+    );
 
     const call = fetchMock.mock.calls.find((item) => String(item[0]).endsWith("/approve"));
     expect(String(call?.[0])).toBe("/transactions/tx-live/approve");
@@ -308,7 +310,9 @@ describe("App: live mode decisions", () => {
     serveWithOverride("/approve", 429, { detail: "daily call limit reached" });
 
     render(<App search="?tx=tx-live" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve KES 23,000 · KES 3,000 over your cap" }),
+    );
 
     expect(await screen.findByText("daily call limit reached")).toBeTruthy();
     // The poll, not the failed response, stays the source of truth for the status.

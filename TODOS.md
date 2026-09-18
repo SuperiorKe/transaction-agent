@@ -30,48 +30,51 @@ The primary backlog is GitHub issues: epic #10 and sub-issues #1-#9. This file h
 
 ### Commit the provider's words before awaiting the model
 
-**What:** In `app/agent/session.py` `respond()`, commit the provider's transcript turn before `await self._run(...)`. That way a poll sees what the provider said while the agent's reply is still being generated.
+**What:** Done. `app/agent/session.py` `respond()` now commits right after `_write_transcript("provider", ...)`, before `await self._run(...)`. A poll sees what the provider said while the agent's reply is still generating.
 
-**Why:** Today `_write_transcript("provider", message.text)` only reaches the database at the `self._session.commit()` after the model returns. So the owner UI's transcript lags a full model round behind the call. Acceptance criterion 4 of #7 (a turn visible within 2 s) would measure poll speed, not what judges see.
+**Why:** Previously `_write_transcript` only reached the database at the `self._session.commit()` after the model returned, so the owner UI's transcript lagged a full model round behind the call.
 
-The outside-voice review also suspects that once `record_offer` flushes, a SQLite write lock is held across the rest of the model rounds. That could block `/approve` or Twilio status callbacks. This is unverified.
-
-**Context:** Found by the outside-voice pass of `/plan-eng-review` on owner UI build step 1 (2026-09-14).
-- The comment in `respond()` says the provider turn is written before the engine runs so `record_offer`'s amount-heard check sees it; committing keeps that working.
-- Decide what a committed provider turn means if the model call then fails. Probably fine, since it's what was actually said.
-- Test the lock theory with two sessions against a file-backed SQLite DB before and after the change.
+**Context:** Found by the outside-voice pass of `/plan-eng-review` on owner UI build step 1 (2026-09-14). The lock theory was verified, not assumed: two threads against a file-backed SQLite DB showed a flush-without-commit both (a) invisible to a concurrent reader and (b) blocking a concurrent writer for the full hold period; committing immediately made both near-instant. A model-call failure after the provider-turn commit is fine as-is -- the transcript row is what was actually said, independent of whether the reply generates successfully.
 
 **Effort:** S
 **Priority:** P1
 **Depends on:** None; must land before owner UI build step 3 (CallPanel)
+**Completed:** unreleased (2026-09-19)
 
 ### Recover from CONFIRMING / CONFIRMATION_FAILED with no owner-facing way out
 
-**What:** `POST /{id}/approve` now calls `start_confirmation()` and `POST /{id}/retry-confirmation`
-now calls `retry_confirmation()` — the HTTP wiring this item used to be about is done, along with
-the unbounded-call and stale-negotiation-reuse bugs an adversarial `/ship` review found in the
-retry path (retries now guard-check and dial a fresh `Negotiation` row instead of reusing the
-failed one), and the confirmation call now runs on `CONFIRMATION_SYSTEM_PROMPT` instead of the
-negotiation prompt. What's left: `CONFIRMING` advances only on a Twilio callback, with no timeout
-and no `allowed_actions` entry — if the callback is lost (tunnel rotates, cloudflared dies), the
-transaction polls forever with nothing the owner can press. `CONFIRMATION_FAILED` only ever leads
-back to `CONFIRMING` via retry; there's no `decline`/abandon action if the owner wants to give up
-on confirming after a failed attempt, unlike `RESULT_READY`/`AWAITING_APPROVAL`, which both offer
-`decline`.
+**What:** Done, all three gaps.
+- `CONFIRMING` no longer strands the owner if a Twilio callback is lost: `app/orchestrator.py`'s
+  `maybe_timeout_confirming()` runs on every `GET /transactions/{id}` (which the owner UI already
+  polls every second) and moves `CONFIRMING` -> `CONFIRMATION_FAILED` once
+  `Settings.confirmation_stuck_timeout_seconds` (default 120) has passed since the confirmation
+  negotiation was created with no callback advancing it. No scheduler needed or added, matching
+  CLAUDE.md's "Workflow: Plain asyncio tasks".
+- `CONFIRMATION_FAILED` now advertises `decline` alongside `retry_confirmation`. It's wired to the
+  existing `decline()`/`DECLINED -> CLOSED` path via a new `(CONFIRMATION_FAILED, DECLINED)` state
+  transition -- an abandon after a failed confirmation call reuses the ordinary decline machinery,
+  so the audit trail reads APPROVED then DECLINED for that offer.
+- `APPROVED` now advertises `retry_confirmation` too, recovering the case where an exception fires
+  between recording approval and the confirmation dial (an unset `current_provider_id`, a DB
+  error) -- `retry_confirmation_transaction` treats `APPROVED` as "start fresh via
+  `start_confirmation()`" rather than "resolve a confirmation negotiation to retry", since none
+  was ever created. `POST /approve` itself is unchanged: an unexpected exception there still
+  surfaces as a 500 to that request, but the transaction is no longer stranded -- the next poll
+  shows `APPROVED` with `retry_confirmation` advertised.
 
 **Why:** A stuck `CONFIRMING` or a `CONFIRMATION_FAILED` an owner doesn't want to keep retrying are
 both dead ends the owner UI can only render as "waiting" forever.
 
 **Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
-Also unresolved from the same review: `POST /approve` starts confirmation in the same request as
-recording the approval, with only `StaleOffer`/`CallGuardBlocked` caught — any other exception
-between the two (an unset `current_provider_id`, a DB error) leaves the transaction at `APPROVED`,
-which has one outgoing edge and no advertised action. Consider either catching more broadly and
-rolling the status back, or giving `APPROVED` its own recovery action.
+Tests: `tests/test_orchestrator.py` (`maybe_timeout_confirming`, `CONFIRMATION_FAILED -> DECLINED`)
+and `tests/test_api.py` (the lazy poll timeout, decline-as-abandon, retry-from-APPROVED) plus the
+new `ALLOWED_TRANSITIONS` row is covered automatically by the existing parametrized
+`test_allowed_transition_updates_status_and_audits` in `tests/test_states.py`.
 
 **Effort:** M
 **Priority:** P1
 **Depends on:** None
+**Completed:** unreleased (2026-09-19)
 
 ### Distinguish STT failures from caller silence in the audit trail
 
@@ -153,26 +156,38 @@ to say what it actually bounds.
 
 ### Owner-route "local only" trusts headers, never the actual peer
 
-**What:** `LocalOnlyOwnerRoutes` decides everything from `Host`/`Origin`/`cf-connecting-ip` —
-client-supplied headers — and never reads `scope["client"]`, the ASGI-reported peer address, even
-though it already reads that same field two lines earlier for the `testserver` test-only allowance.
+**What:** Done. `app/middleware.py`'s `_is_loopback_peer()` checks `scope["client"]`, the
+ASGI-reported peer address, and `LocalOnlyOwnerRoutes.__call__` now forbids a request whose peer
+isn't loopback (`127.0.0.1`/`::1`, or the `testclient` sentinel when the existing
+`allow_testserver` inference already permits it) alongside the existing Host/Origin/tunnel checks.
+`client is None` (a transport with no peer tuple, e.g. a Unix socket) still passes this specific
+check -- nothing to verify there -- and relies on the header checks alone, same as before.
 
-**Why:** Today the real guarantee is uvicorn's default bind to `127.0.0.1`, not this middleware. If
-anyone runs `--host 0.0.0.0` (a one-flag mistake, plausible when demoing over Wi-Fi so a judge's
-laptop can reach the projector machine), any LAN host sending `Host: localhost:8000` with no
-`Origin` gets full owner access — including `/start` and `/approve`, which place real paid calls.
-The header checks are solid defense-in-depth against tunnel leakage and DNS rebinding, but nothing
-here enforces the "local" the module docstring promises if the bind address is ever widened.
+**Why:** Previously the real guarantee was uvicorn's default bind to `127.0.0.1`, not this
+middleware. If anyone ran `--host 0.0.0.0` (a one-flag mistake, plausible when demoing over Wi-Fi
+so a judge's laptop can reach the projector machine), any LAN host sending `Host: localhost:8000`
+with no `Origin` got full owner access — including `/start` and `/approve`, which place real paid
+calls. The header checks were solid defense-in-depth against tunnel leakage and DNS rebinding, but
+nothing enforced the "local" the module docstring promises if the bind address was ever widened.
 
 **Why it's separate from the test_client bypass below:** that item is about a specific allowance
-being too loosely inferred; this one is about the middleware's whole model never checking the one
-signal (the real peer) that would make the guarantee true regardless of headers.
+being too loosely inferred; this one was about the middleware's whole model never checking the one
+signal (the real peer) that makes the guarantee true regardless of headers. Left the
+`test_client`/`allow_testserver` inference mechanism itself untouched -- fixing it would mean
+threading an explicit flag through `create_app()` and updating every `TestClient(create_app())`
+call site across the test suite, for a risk the item's own text already calls "not exploitable
+today" (uvicorn, the only ASGI server this project targets, never puts attacker-controlled data in
+`scope["client"]`). Deferred as its own item below rather than bundled into this fix.
 
 **Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+Tests: `tests/test_middleware.py` (a real loopback peer with a non-TestClient scope passes; a
+non-loopback peer is forbidden even with a passing `Host` header, both via a hand-built ASGI scope
+and via `httpx.ASGITransport(client=...)` through the real app).
 
 **Effort:** S
 **Priority:** P2
 **Depends on:** None
+**Completed:** unreleased (2026-09-19)
 
 ### `test_client` allowance is inferred from ASGI scope, not an explicit flag
 
@@ -215,22 +230,31 @@ already treats dialing as fire-and-poll rather than fire-and-wait.
 
 ### Eagerly-built Twilio client leaks its HTTP connection pool outside the live path
 
-**What:** `app/main.py`'s module-level `app = create_app()` builds a real `TwilioVoiceProvider`
-(and its `httpx.AsyncClient`) from `.env` at import time, before any lifespan runs `aclose()` on
-it. Both `app/openapi_export.py` and `scripts/e2e_server.py` import `app.main`, so each acquires
-(and never closes) a Twilio client's connection pool purely as a side effect of importing the
-module, even though neither ever dials.
+**What:** Done. `TwilioVoiceProvider` (`app/telephony/twilio.py`) now opens its owned
+`httpx.AsyncClient` lazily -- on first actual network call (`place_call`/`hang_up`), via a `_http`
+property backed by `_lazy_http: httpx.AsyncClient | None = None` -- instead of in `__init__`.
+Construction, `render()`/`acknowledge()` (pure TwiML, no network), and `aclose()` on a
+never-dialled provider now never open a connection pool at all.
 
-**Why:** `openapi_export.py`'s own comment claims "the app is built offline with no .env" — true
-for the app it renders, false for the module-level one it imports alongside it, which makes
-`uv run python -m app.openapi_export` (and the pytest that checks the snapshot is fresh) fragile
-against a missing or malformed `.env`.
+**Why:** `app/main.py`'s module-level `app = create_app()` builds a `TwilioVoiceProvider` from
+`.env` at import time, before any lifespan runs `aclose()` on it. Both `app/openapi_export.py` and
+`scripts/e2e_server.py` import `app.main`, so each used to acquire (and never close) a real
+connection pool purely as a side effect of importing the module, even though neither ever dials.
+`openapi_export.py`'s own comment claims "the app is built offline with no .env" — true for the
+app it renders, false for the module-level one it imports alongside it.
 
 **Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+Fixed at the source (the provider itself) rather than restructuring `create_app()`'s wiring to
+defer telephony construction into the lifespan -- smaller, self-contained, and the module-level
+`app = create_app()` line can't be made lazy anyway without changing the documented
+`uvicorn app.main:app` invocation. Test:
+`test_the_owned_http_client_is_never_opened_until_actually_needed` in
+`tests/test_telephony_twilio.py`.
 
 **Effort:** S
 **Priority:** P3
 **Depends on:** None
+**Completed:** unreleased (2026-09-19)
 
 ### Simplification: five spots reimplement something already available
 
@@ -324,63 +348,87 @@ avoid a DB reset mid-build.
 
 ### The font bundle ships subsets this UI never renders
 
-**What:** `web/src/main.tsx`'s six `@fontsource` imports (IBM Plex Sans/Mono, 400/500/600/700) pull
-every language subset and both `.woff`/`.woff2` formats. Measured: `web/dist` is 1.2MB, of which
-840KB is fonts — 423KB is cyrillic/cyrillic-ext/greek/vietnamese subsets a Nairobi photography UI
-never renders, and 396KB is legacy `.woff` duplicates of the `.woff2` files already present.
+**What:** Done. `web/src/main.tsx`'s six `@fontsource` imports now use the latin-subset entrypoints
+(`@fontsource/ibm-plex-sans/latin-{400,500,600,700}.css`,
+`@fontsource/ibm-plex-mono/latin-{400,600}.css`) instead of the unscoped ones that also pulled
+cyrillic/cyrillic-ext/greek/vietnamese `@font-face` blocks. Measured: `web/dist` dropped from
+1.2MB to 516KB (12 font files instead of dozens).
 
-**Why:** `unicode-range` means the browser skips unmatched subsets at runtime, so this mostly costs
-disk and build time rather than what a viewer downloads — but the artifact FastAPI serves is ~3x
-larger than it needs to be for no benefit on this project.
+**Why:** `unicode-range` means the browser skips unmatched subsets at runtime, so this mostly cost
+disk and build time rather than what a viewer downloaded — but the artifact FastAPI serves was ~3x
+larger than it needed to be for no benefit on this project.
 
 **Context:** Found by the `/ship` performance specialist on owner UI build steps 2-3 (2026-09-18).
-Fix: import the latin-only entrypoints (`@fontsource/ibm-plex-sans/400-latin.css`, etc.) instead of
-the unscoped ones.
+Verified the latin subset still covers every non-ASCII character this UI actually renders (the
+bullet `•` in masked phone numbers, the middle dot `·` in the Approve overage label): the combined
+file's own `unicode-range` for the latin block is `U+0000-00FF,...,U+2000-206F,...`, and
+`U+2000-206F` (General Punctuation) covers both -- confirmed by inspecting
+`node_modules/@fontsource/ibm-plex-sans/400.css`'s per-subset `unicode-range` declarations, since
+the single-subset `latin-*.css` files omit the attribute entirely (no other subset registered to
+compete against). `npm test` (199), `npm run build`, and `npm run e2e` (14, including the fixture
+layout checks that would catch a glyph-fallback reflow) all still pass.
 
 **Effort:** S
 **Priority:** P3
 **Depends on:** None
+**Completed:** unreleased (2026-09-19)
 
 ### CallPanel/RecommendationCard don't match DESIGN.md's typography, color, and copy spec
 
-**What:** `/ship`'s design specialist found 8 DESIGN.md violations in the two new components
-(the layout bug that could push Approve off-screen was the 9th finding and is fixed -- see the
-`.transaction-layout` grid-area/flex rework in `web/src/styles.css`):
+**What:** Done, all 8. `/ship`'s design specialist found 8 DESIGN.md violations in the two new
+components (the layout bug that could push Approve off-screen was the 9th finding and was fixed
+separately -- see the `.transaction-layout` grid-area/flex rework in `web/src/styles.css`):
 
-- **Approve's label has no overage.** DESIGN.md: "when `final_price` is above `tx.max_budget`,
-  the Approve label carries the overage, `Approve KES 23,000 · KES 3,000 over your cap`". The
-  button just says "Approve".
-- **The final price has no visual weight.** DESIGN.md: base is 18px except "the final price
-  (44px bold), the provider name (24px bold)". Both render as ordinary `dl` values today.
-- **The transcript spends `--accent` on decoration.** `.transcript-agent { border-left-color:
-  var(--accent) }` — DESIGN.md reserves `--accent` for "the one primary action (Approve), and
-  nothing else".
-- **Highlighted transcript amounts are amber**, but DESIGN.md: "amber means 'needs your approval'
-  on this screen" and specifies highlighted amounts as "`--text` semibold", no ground.
-- **The transcript rows are a colored-left-border card list**, not DESIGN.md's specified "96px
-  uppercase mono speaker column" with no background/border.
-- **The `REQUIRES_APPROVAL`/`WITHIN_LIMIT` state is plain amber/green text**, not the pill with an
-  inline SVG icon (▲/✓) DESIGN.md specifies (`StatusTimeline.tsx` already has the SVG-not-glyph
-  pattern to reuse).
-- **`--amber-edge` is declared and never used.** DESIGN.md: "the approval styling (the pill and an
-  `--amber-edge` border) shows only while `approve` or `decline` is in `tx.allowed_actions`".
-- **CallPanel's Duration is a frozen word ("In progress"), not a ticking timer.** DESIGN.md gives
-  CallPanel "a ticking timer off `answered_at`"; `web/src/useTick.ts` already exists and is used
-  by `StatusTimeline`.
+- **Approve's label has no overage.** Fixed: `RecommendationCard.tsx`'s `ApproveLabel` always
+  shows `Approve KES {price}`, plus a second label line (`.approve-overage`, block-level) with
+  the overage when `final_price` is above `tx.max_budget`.
+- **The final price has no visual weight.** Fixed: `.recommendation-price` (44px bold) on the
+  price `<dd>`, `.call-provider-name` (24px bold) on CallPanel's provider `<dd>`.
+- **The transcript spends `--accent` on decoration.** Fixed by the row-layout rework below --
+  `.transcript-turn` no longer has a border at all.
+- **Highlighted transcript amounts are amber.** Fixed: `mark` is now `--text` semibold, no
+  background.
+- **The transcript rows are a colored-left-border card list.** Fixed: `.transcript-turn` is now a
+  96px-column CSS grid (speaker | text), no background or border; `agent` renders `--text` bold,
+  `provider` `--muted` (the shared rule), `system` turns render with no speaker label and italic
+  `--muted` text.
+- **The `REQUIRES_APPROVAL`/`WITHIN_LIMIT` state was plain amber/green text.** Fixed: a
+  `PolicyPill` with an inline SVG icon (▲/✓, reusing `StatusTimeline`'s SVG-not-glyph pattern,
+  not its component -- the icon set differs). Copy also corrected to match DESIGN.md's exact
+  text ("Within limit" / "Requires approval", not "Within your limit" / "Requires your approval").
+  Bundled with this: the header now reads "Recommendation · accept/ask you/decline" per
+  `recommendation.recommendation`, per the same DESIGN.md sentence.
+- **`--amber-edge` was declared and never used.** Fixed: `.recommendation-card-pending-approval`
+  applies it, and both the pill and the border now show only while `approve` or `decline` is in
+  `tx.allowed_actions` and `policy_status === "REQUIRES_APPROVAL"` -- they disappear once a
+  decision is made (APPROVED, CLOSED, ...), while the price/provider/reason row survives.
+- **CallPanel's Duration was a frozen word.** Fixed: ticks 1 s off `answered_at` via
+  `useTick` while `duration_seconds` is null and the negotiation's `status` is `IN_PROGRESS`;
+  freezes to the persisted `duration_seconds` once set, and to "In progress" if never answered or
+  answered but not live (a missed end callback must not tick forever).
 
-**Why:** This is the one screen judges watch for the whole two-minute demo; none of these are
+Surfaced along the way: `RecommendationCard`'s Approve button was already rendering (and would
+have dialed) even when the local offer join failed to resolve `recommendation.offer_id` against
+`tx.negotiations[].offers[]` -- previously invisible because the button carried no price to
+contradict the "no longer available" message next to it. `recommendation.final_price` is
+authoritative server data independent of that join, so the button showing it isn't "inventing" a
+price; the facts list (`.recommendation-price`) still correctly shows nothing in that state.
+
+**Why:** This is the one screen judges watch for the whole two-minute demo; none of these were
 functional bugs, but the price that decides the entire scenario (KES 23,000 against a KES 20,000
-cap) currently looks like any other label, and the accent color that's supposed to mean one thing
-("click here") appears on transcript rows that aren't clickable.
+cap) used to look like any other label, and the accent color that's supposed to mean one thing
+("click here") used to appear on transcript rows that aren't clickable.
 
-**Context:** Found by the `/ship` design specialist on owner UI build steps 2-3 (2026-09-18). The
-owner chose to fix only the layout bug (a functional risk) in that ship and defer the rest to a
-`/design-review` pass, since it's real visual/CSS work distinct from the security and correctness
-fixes that shipped alongside it.
+**Context:** Found by the `/ship` design specialist on owner UI build steps 2-3 (2026-09-18).
+Fixed CSS-first per DESIGN.md's "Visual system" and "Component contracts" sections. Tests:
+`web/src/components/CallPanel.test.tsx` (provider weight, live-tick via fake timers, freeze
+behavior already covered) and `RecommendationCard.test.tsx` (pill copy and visibility, amber-edge
+border, header suffix, no-overage-within-cap, the offer-join edge case above).
 
 **Effort:** M
 **Priority:** P3
 **Depends on:** None
+**Completed:** unreleased (2026-09-19)
 
 ## Docs
 

@@ -77,6 +77,7 @@ ALLOWED_TRANSITIONS: frozenset[tuple[TxStatus, TxStatus]] = frozenset(
         (T.CONFIRMING, T.AGREED_WITHIN_POLICY),  # provider changed terms: re-approval
         (T.CONFIRMING, T.OUTSIDE_AUTHORITY),  # provider changed terms: re-approval
         (T.CONFIRMATION_FAILED, T.CONFIRMING),
+        (T.CONFIRMATION_FAILED, T.DECLINED),  # owner abandons after a failed confirmation call
     }
 )
 

@@ -500,7 +500,10 @@ def approve(session: Session, tx: Transaction, offer_id: int) -> None:
 
 
 def decline(session: Session, tx: Transaction) -> None:
-    """RESULT_READY/AWAITING_APPROVAL -> DECLINED -> CLOSED, immediately."""
+    """RESULT_READY/AWAITING_APPROVAL -> DECLINED -> CLOSED, immediately. Also legal from
+    CONFIRMATION_FAILED: the owner abandoning a booking after a failed confirmation call, once
+    they don't want to keep retrying. The Approval row this writes carries the already-approved
+    offer_id either way, so the audit trail reads APPROVED then DECLINED for that path."""
     rec = _latest_recommendation(session, tx)
     transition(session, tx, TxStatus.DECLINED.value, "declined by user")
     if rec is not None and rec.offer_id is not None:
@@ -674,6 +677,41 @@ async def _on_confirmation_call_ended(
     session.commit()
 
 
+def maybe_timeout_confirming(
+    session: Session,
+    tx: Transaction,
+    *,
+    timeout_seconds: int,
+    now: Callable[[], datetime] = _utcnow,
+) -> None:
+    """CONFIRMING -> CONFIRMATION_FAILED once `timeout_seconds` have passed since the confirmation
+    call was created with no Twilio callback ever moving the transaction off CONFIRMING (a dead
+    tunnel, a lost callback). There's no scheduler in this build to drive this proactively
+    (CLAUDE.md: "Workflow: Plain asyncio tasks"), so it runs lazily wherever a transaction is read
+    -- the owner UI's poll already hits `GET /transactions/{id}` every second, so this is
+    effectively as responsive as a real timer without adding one. A no-op unless `tx` is currently
+    CONFIRMING; safe to call on every read.
+    """
+    if tx.status != TxStatus.CONFIRMING.value:
+        return
+    negotiation = session.scalar(
+        select(Negotiation)
+        .where(Negotiation.transaction_id == tx.id, Negotiation.kind == "confirmation")
+        .order_by(Negotiation.created_at.desc(), Negotiation.id.desc())
+        .limit(1)
+    )
+    if negotiation is None:
+        return
+    started = datetime.fromisoformat(negotiation.created_at)
+    if (now() - started).total_seconds() < timeout_seconds:
+        return
+    negotiation.status = NegStatus.FAILED.value
+    negotiation.end_reason = "confirmation callback timeout"
+    record_event(session, tx.id, "call.timeout", {"negotiation_id": negotiation.id})
+    transition(session, tx, TxStatus.CONFIRMATION_FAILED.value, "confirmation callback timeout")
+    session.commit()
+
+
 async def retry_confirmation(
     session: Session,
     tx: Transaction,
@@ -816,6 +854,7 @@ __all__: Sequence[str] = (
     "approve",
     "check_call_guard",
     "decline",
+    "maybe_timeout_confirming",
     "on_call_answered",
     "on_call_ended",
     "place_call",

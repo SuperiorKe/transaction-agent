@@ -517,6 +517,17 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Base type is 18px everywhere except these two (DESIGN.md "Type"). */
+.call-provider-name {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.recommendation-price {
+  font-size: 44px;
+  font-weight: 700;
+}
+
 .transcript-wrap {
   min-width: 0;
 }
@@ -536,31 +547,42 @@ button:disabled {
   list-style: none;
 }
 
+/* 96px uppercase mono speaker column, no card chrome (DESIGN.md): --accent is reserved for
+   Approve alone, so a transcript row carries no border or background of its own. */
 .transcript-turn {
-  padding: 8px 10px;
-  border-left: 3px solid var(--line);
-  border-radius: 0 6px 6px 0;
-  background: var(--panel-2);
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 2px 12px;
+  align-items: baseline;
 }
 
-.transcript-agent {
-  border-left-color: var(--accent);
+.transcript-speaker {
+  text-transform: uppercase;
 }
 
-.transcript-provider {
-  border-left-color: var(--green);
+.transcript-agent .transcript-speaker {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.transcript-system p {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .transcript-turn p {
+  grid-column: 2;
   margin: 2px 0 0;
   overflow-wrap: anywhere;
 }
 
+/* Highlighted amounts are --text semibold, not amber: amber means "needs your approval" on this
+   screen, and a provider quote in the transcript isn't that. */
 mark {
-  padding: 0 2px;
-  border-radius: 2px;
-  background: var(--amber-ground);
-  color: var(--amber);
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
 }
 
 .call-empty,
@@ -584,20 +606,41 @@ mark {
   font-weight: 700;
 }
 
-.within-limit-state {
-  color: var(--green);
-}
-
-.approval-state {
-  color: var(--amber);
-}
-
 .unavailable-state {
   color: var(--muted);
 }
 
 .terminal-state {
   color: var(--text);
+}
+
+/* Pill + inline SVG icon (DESIGN.md): "✓ Within limit" in --green, "▲ Requires approval" in
+   --amber on --amber-ground. Shown only while a decision is pending (see RecommendationCard). */
+.policy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.policy-pill-within {
+  color: var(--green);
+}
+
+.policy-pill-approval {
+  color: var(--amber);
+  background: var(--amber-ground);
+}
+
+.policy-icon {
+  flex: none;
+}
+
+.recommendation-card-pending-approval {
+  border-color: var(--amber-edge);
 }
 
 .recommendation-terms {
@@ -624,6 +667,14 @@ mark {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
+  line-height: 1.3;
+}
+
+/* The overage ("KES 3,000 over your cap") is the button's second label line (DESIGN.md). */
+.approve-overage {
+  display: block;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 @media (max-width: 760px) {

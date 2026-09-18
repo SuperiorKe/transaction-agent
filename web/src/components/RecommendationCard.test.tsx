@@ -12,10 +12,10 @@ describe("RecommendationCard", () => {
     const decline = vi.fn(async () => undefined);
     render(<RecommendationCard view={FIXTURES["awaiting-approval"]!} onApprove={approve} onDecline={decline} />);
 
-    expect(screen.getByText("Requires your approval")).toBeTruthy();
+    expect(screen.getByText("Requires approval")).toBeTruthy();
     expect(screen.getByText("KES 23,000")).toBeTruthy();
     expect(screen.getByText("8 hours")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve KES 23,000 · KES 3,000 over your cap" }));
     expect(approve).toHaveBeenCalledWith(11);
     expect(screen.getByRole("button", { name: "Decline" })).toBeTruthy();
   });
@@ -31,7 +31,7 @@ describe("RecommendationCard", () => {
   it("labels a matching, in-cap offer as within the owner's limit", () => {
     render(<RecommendationCard view={FIXTURES["within-limit"]!} />);
 
-    expect(screen.getByText("Within your limit")).toBeTruthy();
+    expect(screen.getByText("Within limit")).toBeTruthy();
     expect(screen.getByText("KES 18,000")).toBeTruthy();
   });
 
@@ -47,12 +47,15 @@ describe("RecommendationCard", () => {
   });
 
   it("does not invent a price when the recommendation points at a missing offer", () => {
+    // The Approve button still shows its price -- recommendation.final_price is authoritative
+    // server data, independent of the local offer join -- but the facts list must not fabricate
+    // one from a nonexistent offer.
     const view = structuredClone(FIXTURES["awaiting-approval"]!);
     view.negotiations[0]!.offers = [];
-    render(<RecommendationCard view={view} onApprove={async () => undefined} />);
+    const { container } = render(<RecommendationCard view={view} onApprove={async () => undefined} />);
 
     expect(screen.getByText(/no longer available/)).toBeTruthy();
-    expect(screen.queryByText(/KES 23,000/)).toBeNull();
+    expect(container.querySelector(".recommendation-price")).toBeNull();
   });
 
   it("flags an unavailable provider instead of presenting its price as bookable", () => {
@@ -95,7 +98,9 @@ describe("RecommendationCard", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "transaction is CONFIRMING, not awaiting a decision",
     );
-    expect(screen.getByRole("button", { name: "Approve" })).toHaveProperty("disabled", false);
+    expect(
+      screen.getByRole("button", { name: "Approve KES 23,000 · KES 3,000 over your cap" }),
+    ).toHaveProperty("disabled", false);
   });
 
   it("shows the manual retry only when the API advertises it", () => {
@@ -103,5 +108,36 @@ describe("RecommendationCard", () => {
 
     expect(screen.getByRole("button", { name: "Retry confirmation" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  it("carries no overage line and no amber styling when the price is within the cap", () => {
+    const { container } = render(<RecommendationCard view={FIXTURES["within-limit"]!} />);
+
+    expect(screen.getByRole("button", { name: "Approve KES 18,000" })).toBeTruthy();
+    expect(screen.queryByText(/over your cap/)).toBeNull();
+    expect(container.querySelector(".recommendation-card-pending-approval")).toBeNull();
+  });
+
+  it("puts the amber-edge border on the card only while a decision is pending", () => {
+    const { container } = render(<RecommendationCard view={FIXTURES["awaiting-approval"]!} />);
+
+    expect(container.querySelector(".recommendation-card-pending-approval")).toBeTruthy();
+  });
+
+  it("hides the pill and the amber-edge border once the decision is no longer pending", () => {
+    // "confirmation-in-progress" carries the same REQUIRES_APPROVAL recommendation forward with
+    // neither approve nor decline advertised (DESIGN.md: the pill is stale once a decision is
+    // made -- the recommendation row itself still shows price/provider/reason).
+    const { container } = render(<RecommendationCard view={FIXTURES["confirmation-in-progress"]!} />);
+
+    expect(container.querySelector(".policy-pill")).toBeNull();
+    expect(container.querySelector(".recommendation-card-pending-approval")).toBeNull();
+    expect(screen.getByText("KES 23,000")).toBeTruthy();
+  });
+
+  it("heads the card with the recommendation's own verb", () => {
+    render(<RecommendationCard view={FIXTURES["awaiting-approval"]!} />);
+
+    expect(screen.getByRole("heading", { name: "Recommendation · ask you" })).toBeTruthy();
   });
 });

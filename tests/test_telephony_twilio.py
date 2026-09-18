@@ -206,3 +206,20 @@ def test_factory_builds_callback_url_from_settings():
     )
     provider = build_twilio_provider(settings)
     assert f'action="{CALLBACK}"' in provider.render(AgentTurn("Hi")).body
+
+
+async def test_the_owned_http_client_is_never_opened_until_actually_needed():
+    """`app/main.py`'s module-level `app = create_app()` builds a provider like this (no injected
+    http_client) from `.env` at import time -- whenever `app.main` is merely imported, not run
+    (`app/openapi_export.py`, `scripts/e2e_server.py`). Neither ever dials, so constructing (and
+    never closing) a real connection pool as a pure import side effect would be a resource leak."""
+    provider = TwilioVoiceProvider(
+        account_sid=ACCOUNT_SID, auth_token="token", from_number=FROM_NUMBER, callback_url=CALLBACK
+    )
+
+    assert provider._lazy_http is None  # nothing opened by construction alone
+    await provider.aclose()  # closing an unused provider must not open one just to close it
+    assert provider._lazy_http is None
+
+    provider.render(AgentTurn("Hi"))  # rendering TwiML never touches the network either
+    assert provider._lazy_http is None

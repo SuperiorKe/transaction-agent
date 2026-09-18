@@ -28,6 +28,7 @@ from app.orchestrator import (
     advance_from_unavailable,
     approve,
     decline,
+    maybe_timeout_confirming,
     on_call_answered,
     on_call_ended,
     place_call,
@@ -602,6 +603,20 @@ async def test_decline_with_no_recommendation_writes_no_approval_row(session):
     assert session.scalars(select(Approval)).all() == []
 
 
+async def test_confirmation_failed_to_declined_to_closed_abandons_the_booking(session):
+    """The owner giving up after a failed confirmation call: same decline()/DECLINED->CLOSED path
+    as a pre-approval decline, so the audit trail reads APPROVED then DECLINED for that offer."""
+    tx, _ = await _approved_tx(session)
+    tx.status = TxStatus.CONFIRMATION_FAILED.value
+    session.commit()
+
+    decline(session, tx)
+
+    assert tx.status == TxStatus.CLOSED.value
+    decisions = [row.decision for row in session.scalars(select(Approval)).all()]
+    assert decisions == ["APPROVED", "DECLINED"]
+
+
 # --- confirmation call flow ----------------------------------------------------------------------
 
 
@@ -856,6 +871,66 @@ async def test_retry_confirmation_dials_a_fresh_negotiation_not_the_failed_one(s
     assert fresh.dial_attempt == 1
     # The old row's outcome is untouched -- a retry must not silently rewrite history.
     assert stale.status == NegStatus.CONFIRMED.value
+
+
+# --- maybe_timeout_confirming: CONFIRMING -> CONFIRMATION_FAILED with no callback --------------
+
+
+async def test_maybe_timeout_confirming_fails_a_stuck_call(session):
+    tx, provider = await _approved_tx(session)
+    negotiation = make_negotiation(
+        session,
+        tx,
+        provider,
+        kind="confirmation",
+        created_at=(NOW() - timedelta(seconds=121)).isoformat(timespec="milliseconds"),
+    )
+    tx.status = TxStatus.CONFIRMING.value
+    session.commit()
+
+    maybe_timeout_confirming(session, tx, timeout_seconds=120, now=NOW)
+
+    assert tx.status == TxStatus.CONFIRMATION_FAILED.value
+    assert negotiation.status == NegStatus.FAILED.value
+    assert (
+        session.scalars(
+            select(AuditEvent).where(AuditEvent.event_type == "call.timeout")
+        ).one_or_none()
+        is not None
+    )
+
+
+async def test_maybe_timeout_confirming_leaves_a_fresh_call_alone(session):
+    tx, provider = await _approved_tx(session)
+    make_negotiation(
+        session,
+        tx,
+        provider,
+        kind="confirmation",
+        created_at=(NOW() - timedelta(seconds=10)).isoformat(timespec="milliseconds"),
+    )
+    tx.status = TxStatus.CONFIRMING.value
+    session.commit()
+
+    maybe_timeout_confirming(session, tx, timeout_seconds=120, now=NOW)
+
+    assert tx.status == TxStatus.CONFIRMING.value
+
+
+async def test_maybe_timeout_confirming_is_a_no_op_off_confirming(session):
+    tx = make_tx(session, status=TxStatus.CONFIRMATION_FAILED.value)
+
+    maybe_timeout_confirming(session, tx, timeout_seconds=120, now=NOW)
+
+    assert tx.status == TxStatus.CONFIRMATION_FAILED.value
+
+
+async def test_maybe_timeout_confirming_is_a_no_op_with_no_confirmation_negotiation(session):
+    tx = make_tx(session, status=TxStatus.CONFIRMING.value)
+
+    maybe_timeout_confirming(session, tx, timeout_seconds=120, now=NOW)  # must not raise
+
+    assert tx.status == TxStatus.CONFIRMING.value
 
 
 # --- callback -> orchestrator mapping ------------------------------------------------------------

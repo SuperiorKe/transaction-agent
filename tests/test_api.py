@@ -4,7 +4,7 @@ FakeTelephonyProvider + ScriptedLLMProvider; no vendor SDK, no network, no real 
 """
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
@@ -18,7 +18,7 @@ from app.config import Settings
 from app.db import init_db, make_engine
 from app.llm.base import LLMError, LLMProvider, ToolCall
 from app.llm.fake import ScriptedLLMProvider, reply, tool_use
-from app.models import Approval, Negotiation, Offer, Provider, Transaction
+from app.models import Approval, AuditEvent, Negotiation, Offer, Provider, Transaction
 from app.orchestrator import on_call_answered, on_call_ended
 from app.routes.parse import build_parse_router
 from app.routes.transactions import build_transactions_router
@@ -363,7 +363,7 @@ def test_approve_returns_a_retryable_confirmation_failed_view_when_dialing_fails
 
     assert response.status_code == 202
     assert response.json()["status"] == "CONFIRMATION_FAILED"
-    assert response.json()["allowed_actions"] == ["retry_confirmation"]
+    assert response.json()["allowed_actions"] == ["retry_confirmation", "decline"]
 
 
 def test_approve_without_any_recommendation_is_409_and_dials_nothing():
@@ -487,6 +487,38 @@ def test_decline_on_a_transaction_not_awaiting_a_decision_is_409():
     assert client.post(f"/transactions/{tx_id}/decline").status_code == 409
 
 
+def test_decline_from_confirmation_failed_abandons_the_transaction():
+    """The owner giving up on a booking after a failed confirmation call reuses the ordinary
+    DECLINED -> CLOSED path (see TODOS.md "Recover from CONFIRMING / CONFIRMATION_FAILED...")."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        db.get(Transaction, tx_id).status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/decline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CLOSED"
+    assert body["terminal"] is True
+    assert body["allowed_actions"] == []
+    with session_factory() as db:
+        decisions = [
+            row.decision
+            for row in db.scalars(
+                select(Approval).where(Approval.transaction_id == tx_id).order_by(Approval.id)
+            ).all()
+        ]
+        assert decisions == ["APPROVED", "DECLINED"]
+
+
 # --- POST /transactions/{id}/retry-confirmation -----------------------------------------------
 
 
@@ -513,6 +545,37 @@ def test_retry_confirmation_rejects_a_failed_transaction_without_a_confirmation_
 
     assert response.status_code == 409
     assert "no confirmation call" in response.json()["detail"]
+
+
+def test_retry_confirmation_from_approved_starts_a_fresh_confirmation_call():
+    """Recovers a transaction stranded at APPROVED by an exception between recording approval and
+    the confirmation dial (see TODOS.md "Recover from CONFIRMING / CONFIRMATION_FAILED...").
+    Simulated by forcing the status back to APPROVED with an APPROVED approvals row but no
+    confirmation negotiation, the exact shape that failure leaves behind -- so this must start
+    fresh via start_confirmation(), not resolve a negotiation that was never created."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FakeTelephonyProvider()
+    app, _, _ = _build_app(session_factory=session_factory, telephony=telephony)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    with session_factory() as db:
+        tx = db.get(Transaction, tx_id)
+        tx.status = TxStatus.APPROVED.value
+        db.add(Approval(transaction_id=tx_id, offer_id=offer_id, decision="APPROVED"))
+        db.commit()
+        assert db.scalars(select(Negotiation).where(Negotiation.kind == "confirmation")).all() == []
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "CONFIRMING"
+    assert body["negotiations"][-1]["kind"] == "confirmation"
+    # One dial from /start's negotiation call, one from this confirmation retry.
+    assert telephony.placed_calls == ["+254100000678", "+254100000678"]
 
 
 def test_retry_confirmation_retries_the_latest_confirmation_call():
@@ -568,7 +631,7 @@ def test_retry_confirmation_is_blocked_by_the_daily_call_guard():
     assert len(telephony.placed_calls) == calls_before  # no new dial
     view = client.get(f"/transactions/{tx_id}").json()
     assert view["status"] == "CONFIRMATION_FAILED"
-    assert view["allowed_actions"] == ["retry_confirmation"]
+    assert view["allowed_actions"] == ["retry_confirmation", "decline"]
 
 
 def test_retry_confirmation_dials_a_fresh_negotiation_not_the_failed_one():
@@ -621,7 +684,7 @@ def test_retry_confirmation_that_fails_again_stays_retryable():
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "CONFIRMATION_FAILED"
-    assert body["allowed_actions"] == ["retry_confirmation"]
+    assert body["allowed_actions"] == ["retry_confirmation", "decline"]
 
 
 def test_retry_confirmation_unknown_transaction_is_404():
@@ -641,8 +704,73 @@ def test_confirmation_retry_is_advertised_only_after_a_failed_confirmation_call(
         db.commit()
 
     # CONFIRMING is a real in-flight state that also advertises no actions -- the owner can only
-    # wait for the callback that resolves it, same as CONFIRMATION_FAILED before a retry.
+    # wait for the callback that resolves it (or the timeout below), same as CONFIRMATION_FAILED
+    # before a retry. No confirmation negotiation exists in this test, so maybe_timeout_confirming
+    # is a no-op regardless of elapsed time.
     assert client.get(f"/transactions/{tx_id}").json()["allowed_actions"] == []
+
+
+def test_a_stuck_confirming_call_times_out_on_poll():
+    """CONFIRMING has no route and no allowed_actions of its own: the only way out when a Twilio
+    callback never arrives (a dead tunnel) is a poll noticing the confirmation call has been
+    running too long. See TODOS.md "Recover from CONFIRMING / CONFIRMATION_FAILED...".
+    """
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(
+        session_factory=session_factory, settings=_settings(confirmation_stuck_timeout_seconds=60)
+    )
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        negotiation = db.scalar(
+            select(Negotiation).where(
+                Negotiation.transaction_id == tx_id, Negotiation.kind == "confirmation"
+            )
+        )
+        negotiation.created_at = (NOW() - timedelta(seconds=61)).isoformat(timespec="milliseconds")
+        db.commit()
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status"] == "CONFIRMATION_FAILED"
+    assert body["allowed_actions"] == ["retry_confirmation", "decline"]
+    with session_factory() as db:
+        events = db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.transaction_id == tx_id, AuditEvent.event_type == "call.timeout"
+            )
+        ).all()
+        assert len(events) == 1
+
+
+def test_a_confirming_call_within_the_timeout_window_stays_confirming():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(
+        session_factory=session_factory, settings=_settings(confirmation_stuck_timeout_seconds=60)
+    )
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        negotiation = db.scalar(
+            select(Negotiation).where(
+                Negotiation.transaction_id == tx_id, Negotiation.kind == "confirmation"
+            )
+        )
+        negotiation.created_at = (NOW() - timedelta(seconds=30)).isoformat(timespec="milliseconds")
+        db.commit()
+
+    body = client.get(f"/transactions/{tx_id}").json()
+
+    assert body["status"] == "CONFIRMING"
+    assert body["allowed_actions"] == []
 
 
 # --- audit trail visible on the view --------------------------------------------------------------
