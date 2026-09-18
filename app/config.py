@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     max_calls_per_day: int = 40
     call_hard_end_seconds: int = 180
     confirm_retry_delay_seconds: int = 120
+    # If CONFIRMING sits this long with no Twilio callback advancing it (tunnel died, callback
+    # lost), a poll declares it CONFIRMATION_FAILED so the owner UI has a way out. Checked lazily
+    # on GET, not by a scheduler -- there isn't one (CLAUDE.md: "Workflow: Plain asyncio tasks").
+    confirmation_stuck_timeout_seconds: int = 120
 
 
 @lru_cache

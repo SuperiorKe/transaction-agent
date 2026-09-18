@@ -15,6 +15,7 @@ EVENT_TYPES = frozenset(
         "call.answered",
         "call.ended",
         "call.redial",
+        "call.timeout",
         "call.guard_blocked",
         "call.input_received",
         "call.response_sent",

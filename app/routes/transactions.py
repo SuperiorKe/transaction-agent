@@ -21,10 +21,12 @@ from app.models import (
     TranscriptTurn,
 )
 from app.orchestrator import (
+    ApprovalRequired,
     CallGuardBlocked,
     StaleOffer,
     advance_from_unavailable,
     check_call_guard,
+    maybe_timeout_confirming,
     place_call,
     retry_confirmation,
     select_provider,
@@ -64,7 +66,15 @@ ALLOWED_ACTIONS_BY_STATUS: dict[str, tuple[str, ...]] = {
     TxStatus.CREATED.value: ("start",),
     TxStatus.RESULT_READY.value: ("approve", "decline"),
     TxStatus.AWAITING_APPROVAL.value: ("approve", "decline"),
-    TxStatus.CONFIRMATION_FAILED.value: ("retry_confirmation",),
+    # A recovery action for an exception between recording approval and the confirmation dial
+    # (an unset current_provider_id, a DB error) -- anything but StaleOffer/CallGuardBlocked, which
+    # approve_transaction already handles. See TODOS.md "Recover from CONFIRMING /
+    # CONFIRMATION_FAILED...". retry_confirmation_transaction treats APPROVED as "start fresh"
+    # rather than "resolve a confirmation negotiation to retry", since none exists yet.
+    TxStatus.APPROVED.value: ("retry_confirmation",),
+    # "decline" here means abandon: give up on this booking after a failed confirmation call
+    # instead of retrying again. Reuses the ordinary decline()/DECLINED->CLOSED path.
+    TxStatus.CONFIRMATION_FAILED.value: ("retry_confirmation", "decline"),
 }
 
 
@@ -256,6 +266,9 @@ def build_transactions_router(
     def get_transaction(
         tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
     ) -> TransactionView:
+        maybe_timeout_confirming(
+            db, tx, timeout_seconds=settings.confirmation_stuck_timeout_seconds, now=now
+        )
         return _build_view(db, tx)
 
     @router.post(
@@ -353,7 +366,14 @@ def build_transactions_router(
     def decline_transaction(
         tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
     ) -> TransactionView:
-        if tx.status not in (TxStatus.RESULT_READY.value, TxStatus.AWAITING_APPROVAL.value):
+        # CONFIRMATION_FAILED is the owner abandoning a booking after a failed confirmation call,
+        # rather than declining an offer before one was ever approved -- same DECLINED -> CLOSED
+        # path either way (see orchestrator.decline's docstring).
+        if tx.status not in (
+            TxStatus.RESULT_READY.value,
+            TxStatus.AWAITING_APPROVAL.value,
+            TxStatus.CONFIRMATION_FAILED.value,
+        ):
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 detail=f"transaction is {tx.status}, not awaiting a decision",
@@ -370,36 +390,54 @@ def build_transactions_router(
     async def retry_confirmation_transaction(
         tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
     ) -> TransactionView:
-        if tx.status != TxStatus.CONFIRMATION_FAILED.value:
+        if tx.status not in (TxStatus.CONFIRMATION_FAILED.value, TxStatus.APPROVED.value):
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 detail=f"transaction is {tx.status}, not awaiting confirmation retry",
             )
-        negotiation = db.scalar(
-            select(Negotiation)
-            .where(
-                Negotiation.transaction_id == tx.id,
-                Negotiation.kind == "confirmation",
+        # APPROVED means the confirmation call never got as far as CONFIRMING (an exception
+        # between recording approval and the dial), so there's no confirmation negotiation to
+        # resolve -- start fresh, same as the happy path in /approve, instead of retrying a call
+        # that never existed.
+        negotiation = None
+        if tx.status == TxStatus.CONFIRMATION_FAILED.value:
+            negotiation = db.scalar(
+                select(Negotiation)
+                .where(
+                    Negotiation.transaction_id == tx.id,
+                    Negotiation.kind == "confirmation",
+                )
+                .order_by(Negotiation.created_at.desc(), Negotiation.id.desc())
+                .limit(1)
             )
-            .order_by(Negotiation.created_at.desc(), Negotiation.id.desc())
-            .limit(1)
-        )
-        if negotiation is None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail="transaction has no confirmation call to retry",
-            )
+            if negotiation is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail="transaction has no confirmation call to retry",
+                )
         try:
-            await retry_confirmation(
-                db,
-                tx,
-                negotiation,
-                telephony=telephony,
-                max_calls_per_day=settings.max_calls_per_day,
-                now=now,
-            )
+            if negotiation is not None:
+                await retry_confirmation(
+                    db,
+                    tx,
+                    negotiation,
+                    telephony=telephony,
+                    max_calls_per_day=settings.max_calls_per_day,
+                    now=now,
+                )
+            else:
+                await start_confirmation(
+                    db,
+                    tx,
+                    telephony=telephony,
+                    max_calls_per_day=settings.max_calls_per_day,
+                    now=now,
+                )
         except CallGuardBlocked as exc:
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+        except ApprovalRequired as exc:
+            # Defensive only: APPROVED implies an APPROVED approvals row already exists.
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         return _build_view(db, tx)
 
     return router
