@@ -60,12 +60,26 @@ class TwilioVoiceProvider:
         self._from_number = from_number
         self._callback_url = callback_url
         self._owns_http = http_client is None
-        self._http = http_client or httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        self._injected_http = http_client
+        # Built lazily (see the `_http` property below), not here: `app/main.py`'s module-level
+        # `app = create_app()` constructs a provider like this one from `.env` at import time,
+        # before any lifespan can `aclose()` it -- and both `app/openapi_export.py` and
+        # `scripts/e2e_server.py` import that module without ever dialing. Eagerly opening a real
+        # httpx.AsyncClient connection pool here would leak one as a pure import side effect.
+        self._lazy_http: httpx.AsyncClient | None = None
         self._api_base_url = api_base_url.rstrip("/")
 
+    @property
+    def _http(self) -> httpx.AsyncClient:
+        if self._injected_http is not None:
+            return self._injected_http
+        if self._lazy_http is None:
+            self._lazy_http = httpx.AsyncClient(timeout=httpx.Timeout(10.0))
+        return self._lazy_http
+
     async def aclose(self) -> None:
-        if self._owns_http:
-            await self._http.aclose()
+        if self._owns_http and self._lazy_http is not None:
+            await self._lazy_http.aclose()
 
     async def place_call(self, to_number: str) -> PlacedCall:
         if not (self._account_sid and self._auth_token and self._from_number):
