@@ -125,6 +125,59 @@ const OVER_CAP_EVENTS: AuditEvent[] = [
   { type: "offer.recorded", payload: { amount: 23000, available: true, coverage_hours: 8 }, at: at(141) },
 ];
 
+const WITHIN_LIMIT_CALL: Negotiation = {
+  ...OVER_CAP_CALL,
+  id: "neg-within-limit",
+  status: "AGREED",
+  offers: [{
+    id: 10,
+    amount: 18000,
+    available: true,
+    coverage_hours: 6,
+    deposit_required: false,
+    terms: "6 hours, edited photos, no deposit",
+    decision: "MAY_ACCEPT",
+    at: at(141),
+  }],
+};
+
+const CONFIRMATION_CALL: Negotiation = {
+  id: "confirm-1",
+  kind: "confirmation",
+  provider_name: "Studio A",
+  status: "IN_PROGRESS",
+  attempt_count: 0,
+  dial_attempt: 1,
+  answered_at: at(210),
+  duration_seconds: 34,
+  transcript: [
+    { speaker: "agent", text: "I'm calling to confirm the 23,000 shilling booking for Monday.", at: at(211) },
+    { speaker: "provider", text: "Yes, Studio A can confirm those terms.", at: at(225) },
+  ],
+  offers: [],
+};
+
+const CHANGED_TERMS_CALL: Negotiation = {
+  ...CONFIRMATION_CALL,
+  id: "confirm-changed-terms",
+  status: "TERMS_CHANGED",
+  duration_seconds: 68,
+  transcript: [
+    ...CONFIRMATION_CALL.transcript,
+    { speaker: "provider", text: "The new price is KES 25,000 for 8 hours.", at: at(250) },
+  ],
+  offers: [{
+    id: 12,
+    amount: 25000,
+    available: true,
+    coverage_hours: 8,
+    deposit_required: false,
+    terms: "8 hours, edited photos, no deposit",
+    decision: "MUST_ESCALATE",
+    at: at(251),
+  }],
+};
+
 export const FIXTURES: Record<string, TransactionView> = {
   created: transaction({ id: "mock-created", history: ["CREATED"], allowedActions: ["start"] }),
 
@@ -150,6 +203,76 @@ export const FIXTURES: Record<string, TransactionView> = {
     recommendation: OVER_CAP_RECOMMENDATION,
     allowedActions: ["approve", "decline"],
     extraAudit: OVER_CAP_EVENTS,
+  }),
+
+  "within-limit": transaction({
+    id: "mock-within-limit",
+    history: ["CREATED", ...TO_NEGOTIATING, "AGREED_WITHIN_POLICY", "RESULT_READY"],
+    negotiations: [WITHIN_LIMIT_CALL],
+    recommendation: {
+      offer_id: 10,
+      provider_name: "Studio A",
+      final_price: 18000,
+      policy_status: "WITHIN_LIMIT",
+      recommendation: "ACCEPT",
+      reason: "Final offer KES 18,000 is within your KES 20,000 budget.",
+    },
+    allowedActions: ["approve", "decline"],
+  }),
+
+  "confirmation-in-progress": transaction({
+    id: "mock-confirming",
+    history: ["CREATED", ...TO_APPROVAL, "APPROVED", "CONFIRMING"],
+    negotiations: [OVER_CAP_CALL, CONFIRMATION_CALL],
+    recommendation: OVER_CAP_RECOMMENDATION,
+    extraAudit: OVER_CAP_EVENTS,
+  }),
+
+  "confirmation-failed": transaction({
+    id: "mock-confirmation-failed",
+    history: ["CREATED", ...TO_APPROVAL, "APPROVED", "CONFIRMING", "CONFIRMATION_FAILED"],
+    negotiations: [OVER_CAP_CALL, { ...CONFIRMATION_CALL, status: "FAILED", duration_seconds: 71 }],
+    recommendation: OVER_CAP_RECOMMENDATION,
+    allowedActions: ["retry_confirmation"],
+    extraAudit: OVER_CAP_EVENTS,
+  }),
+
+  confirmed: transaction({
+    id: "mock-confirmed",
+    history: ["CREATED", ...TO_APPROVAL, "APPROVED", "CONFIRMING", "CONFIRMED"],
+    negotiations: [OVER_CAP_CALL, { ...CONFIRMATION_CALL, status: "CONFIRMED", duration_seconds: 71 }],
+    recommendation: OVER_CAP_RECOMMENDATION,
+    extraAudit: OVER_CAP_EVENTS,
+  }),
+
+  "changed-terms": transaction({
+    id: "mock-changed-terms",
+    history: ["CREATED", ...TO_APPROVAL, "APPROVED", "CONFIRMING", "OUTSIDE_AUTHORITY", "AWAITING_APPROVAL"],
+    negotiations: [OVER_CAP_CALL, CHANGED_TERMS_CALL],
+    recommendation: {
+      offer_id: 12,
+      provider_name: "Studio A",
+      final_price: 25000,
+      policy_status: "REQUIRES_APPROVAL",
+      recommendation: "ASK_USER",
+      reason: "Changed confirmation terms are KES 5,000 over your KES 20,000 budget.",
+    },
+    allowedActions: ["approve", "decline"],
+  }),
+
+  "awaiting-no-price": transaction({
+    id: "mock-awaiting-no-price",
+    history: ["CREATED", ...TO_APPROVAL],
+    negotiations: [OVER_CAP_CALL],
+    recommendation: {
+      offer_id: null,
+      provider_name: "Studio A",
+      final_price: null,
+      policy_status: "NONE",
+      recommendation: "ASK_USER",
+      reason: "The provider requested a deposit before quoting a price.",
+    },
+    allowedActions: ["decline"],
   }),
 
   declined: transaction({

@@ -24,8 +24,8 @@ describe("STAGE_OF", () => {
     expect(Object.keys(STAGE_OF).sort()).toEqual([...published].sort());
   });
 
-  it("keeps APPROVED under Your decision while no confirmation call exists", () => {
-    expect(STAGE_OF.APPROVED).toBe("decision");
+  it("moves APPROVED to Confirming as confirmation starts immediately", () => {
+    expect(STAGE_OF.APPROVED).toBe("confirming");
   });
 
   it("orders the six stages as the chips appear", () => {
@@ -82,15 +82,15 @@ describe("reachedStages", () => {
       },
     ],
     [
-      "approved, with no confirmation call wired yet: shown as done 'Approved'",
+      "approved: confirmation is beginning",
       "APPROVED",
       ["CREATED", "PROVIDER_SELECTED", "CALLING", "NEGOTIATING", "AGREED_WITHIN_POLICY", "RESULT_READY", "APPROVED"],
       {
         request: "reached",
         calling: "reached",
         negotiating: "reached",
-        decision: "current:approved",
-        confirming: "future",
+        decision: "reached",
+        confirming: "current:approved",
         done: "future",
       },
     ],

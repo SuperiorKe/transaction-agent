@@ -11,15 +11,33 @@ const EXPECTED_TERMINAL: Record<string, boolean> = {
   created: false,
   negotiating: false,
   "awaiting-approval": false,
+  "awaiting-no-price": false,
+  "changed-terms": false,
+  "confirmation-failed": false,
+  "confirmation-in-progress": false,
+  confirmed: true,
   declined: true,
   failed: true,
+  "within-limit": false,
 };
 const entries = Object.entries(FIXTURES);
 
 describe("FIXTURES", () => {
-  it("covers the step 1 states, including the canonical approval moment", () => {
+  it("covers decision and confirmation states, including re-approval after changed terms", () => {
     expect(Object.keys(FIXTURES).sort()).toEqual(
-      ["awaiting-approval", "created", "declined", "failed", "negotiating"].sort(),
+      [
+        "awaiting-approval",
+        "awaiting-no-price",
+        "changed-terms",
+        "confirmation-failed",
+        "confirmation-in-progress",
+        "confirmed",
+        "created",
+        "declined",
+        "failed",
+        "negotiating",
+        "within-limit",
+      ].sort(),
     );
     expect(FIXTURES["awaiting-approval"]?.status).toBe("AWAITING_APPROVAL");
   });

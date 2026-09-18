@@ -24,9 +24,9 @@ export const STAGES: readonly { stage: Stage; label: string }[] = [
 ];
 
 // DESIGN.md decision 2. A Record keyed by the generated TxStatus union, so a status added in
-// app/states.py fails `tsc` here until it's given a stage. APPROVED stays under "Your decision"
-// (shown as done: "Approved") while /approve starts no confirmation call: lighting Confirming
-// would claim a call that isn't happening.
+// app/states.py fails `tsc` here until it's given a stage. Approval immediately starts the
+// confirmation orchestration, so APPROVED belongs to Confirming even in the brief interval before
+// the dial transitions it to CONFIRMING.
 export const STAGE_OF: Record<TxStatus, Stage> = {
   CREATED: "request",
   PROVIDER_SELECTED: "calling",
@@ -38,9 +38,8 @@ export const STAGE_OF: Record<TxStatus, Stage> = {
   OUTSIDE_AUTHORITY: "negotiating",
   RESULT_READY: "decision",
   AWAITING_APPROVAL: "decision",
-  APPROVED: "decision",
+  APPROVED: "confirming",
   CONFIRMING: "confirming",
-  CONFIRM_RETRY_WAIT: "confirming",
   CONFIRMATION_FAILED: "confirming",
   CONFIRMED: "done",
   DECLINED: "done",

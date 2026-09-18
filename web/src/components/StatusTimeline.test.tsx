@@ -62,7 +62,7 @@ describe("StatusTimeline", () => {
     expect(screen.getByRole("list").querySelectorAll("svg[aria-hidden='true']").length).toBeGreaterThan(0);
   });
 
-  it("shows an approval as ✓ Approved under Your decision, not as still pending", () => {
+  it("moves approval into Confirming as the confirmation call begins", () => {
     render(
       <StatusTimeline
         status="APPROVED"
@@ -71,10 +71,10 @@ describe("StatusTimeline", () => {
       />,
     );
 
-    const decision = chip("Your decision: approved");
-    expect(iconOf(decision)).toBe("check");
-    expect(decision.textContent).toContain("Approved");
-    expect(iconOf(chip("Confirming: upcoming"))).toBeNull();
+    expect(iconOf(chip("Your decision: reached"))).toBe("check");
+    const confirming = chip("Confirming: approved");
+    expect(iconOf(confirming)).toBe("check");
+    expect(confirming.textContent).toContain("Approved");
   });
 
   it("never ticks Confirming on a declined transaction", () => {

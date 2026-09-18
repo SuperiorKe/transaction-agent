@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { REQUEST_TIMEOUT_MS, fetchTransaction, normaliseDetail } from "./client";
+import {
+  REQUEST_TIMEOUT_MS,
+  approveTransaction,
+  createTransaction,
+  declineTransaction,
+  fetchTransaction,
+  normaliseDetail,
+  parseRequest,
+  retryConfirmation,
+  startTransaction,
+} from "./client";
 import type { TransactionView } from "./client";
 
 // client.ts is the ONLY module allowed to call fetch. It turns every HTTP outcome into one of five
@@ -210,5 +220,84 @@ describe("normaliseDetail", () => {
   it("falls back to the status for an empty string or an empty validation list", () => {
     expect(normaliseDetail({ detail: "" }, 400)).toBe("Request failed (400)");
     expect(normaliseDetail({ detail: [] }, 422)).toBe("Request failed (422)");
+  });
+});
+
+describe("owner mutations", () => {
+  const PARSED = {
+    service: "photography",
+    service_date: "2026-09-20",
+    date_text: "Saturday",
+    location: "Nairobi",
+    max_budget: 20000,
+    max_attempts: 2,
+    missing: [],
+  };
+
+  it("posts the original request to the parser and returns the parsed constraints", async () => {
+    const fetchMock = respond(200, PARSED);
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await parseRequest("Photographer in Nairobi")).toEqual({ ok: true, value: PARSED });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/parse-request");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({
+      text: "Photographer in Nairobi",
+    });
+  });
+
+  it("posts transaction fields and URL-encodes an id when starting", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(VIEW), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(VIEW), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createTransaction({
+      request: "Photographer in Nairobi",
+      service: "photography",
+      service_date: "2026-09-20",
+      location: "Nairobi",
+      max_budget: 20000,
+      max_attempts: 2,
+    });
+    await startTransaction("a/b c");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/transactions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/transactions/a%2Fb%20c/start");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+  });
+
+  it("posts approval, decline, and manual confirmation retry through encoded URLs", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(VIEW), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(VIEW), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(VIEW), { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await approveTransaction("a/b c", 42);
+    await declineTransaction("a/b c");
+    await retryConfirmation("a/b c");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/transactions/a%2Fb%20c/approve");
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({ offer_id: 42 });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/transactions/a%2Fb%20c/decline");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/transactions/a%2Fb%20c/retry-confirmation");
+  });
+
+  it("normalizes validation and non-JSON mutation failures for display", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ detail: [{ msg: "Field required" }] }), { status: 422 }),
+        )
+        .mockResolvedValueOnce(new Response("Bad gateway", { status: 502 })),
+    );
+
+    expect(await parseRequest("x")).toEqual({ ok: false, detail: "Field required" });
+    expect(await startTransaction("tx-1")).toEqual({ ok: false, detail: "Request failed (502)" });
   });
 });

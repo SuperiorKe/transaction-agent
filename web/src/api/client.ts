@@ -1,6 +1,11 @@
 import type { components } from "./openapi.gen";
 
 export type TransactionView = components["schemas"]["TransactionView"];
+export type ParsedRequest = components["schemas"]["ParsedRequest"];
+export type TransactionCreate = components["schemas"]["TransactionCreate"];
+
+/** A display-safe result for mutations. The UI never renders an untrusted JSON object directly. */
+export type ApiResult<T> = { ok: true; value: T } | { ok: false; detail: string };
 
 // Every HTTP outcome, reduced to what the poll loop needs to decide.
 export type FetchResult =
@@ -74,6 +79,54 @@ export async function fetchTransaction(id: string, signal: AbortSignal): Promise
   }
 }
 
+export function parseRequest(text: string): Promise<ApiResult<ParsedRequest>> {
+  return postJson("/parse-request", { text }, looksLikeParsedRequest);
+}
+
+export function createTransaction(body: TransactionCreate): Promise<ApiResult<TransactionView>> {
+  return postJson("/transactions", body, looksLikeView);
+}
+
+export function startTransaction(id: string): Promise<ApiResult<TransactionView>> {
+  return postJson(`/transactions/${encodeURIComponent(id)}/start`, undefined, looksLikeView);
+}
+
+export function approveTransaction(id: string, offerId: number): Promise<ApiResult<TransactionView>> {
+  return postJson(`/transactions/${encodeURIComponent(id)}/approve`, { offer_id: offerId }, looksLikeView);
+}
+
+export function declineTransaction(id: string): Promise<ApiResult<TransactionView>> {
+  return postJson(`/transactions/${encodeURIComponent(id)}/decline`, undefined, looksLikeView);
+}
+
+export function retryConfirmation(id: string): Promise<ApiResult<TransactionView>> {
+  return postJson(`/transactions/${encodeURIComponent(id)}/retry-confirmation`, undefined, looksLikeView);
+}
+
+async function postJson<T>(
+  path: string,
+  body: unknown,
+  isExpected: (value: unknown) => value is T,
+): Promise<ApiResult<T>> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: "POST",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    return { ok: false, detail: "Can't reach the API" };
+  }
+
+  const parsed = await readJson(response);
+  if (!response.ok) {
+    return { ok: false, detail: normaliseDetail(parsed.ok ? parsed.value : undefined, response.status) };
+  }
+  if (parsed.ok && isExpected(parsed.value)) return { ok: true, value: parsed.value };
+  return { ok: false, detail: "The API sent an unexpected response" };
+}
+
 /**
  * FastAPI's `detail` is a string for HTTPException but a list of `{loc, msg}` objects for request
  * validation (422). Rendering the list directly would crash React, so always hand back a string.
@@ -101,6 +154,18 @@ function looksLikeView(value: unknown): value is TransactionView {
     typeof value.terminal === "boolean" &&
     Array.isArray(value.status_history) &&
     Array.isArray(value.audit)
+  );
+}
+
+function looksLikeParsedRequest(value: unknown): value is ParsedRequest {
+  return (
+    isRecord(value) &&
+    (value.service === "photography" || value.service === "unsupported") &&
+    (typeof value.service_date === "string" || value.service_date === null) &&
+    (typeof value.location === "string" || value.location === null) &&
+    (typeof value.max_budget === "number" || value.max_budget === null) &&
+    (value.max_attempts === 0 || value.max_attempts === 1 || value.max_attempts === 2) &&
+    Array.isArray(value.missing)
   );
 }
 
