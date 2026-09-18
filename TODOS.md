@@ -384,24 +384,19 @@ fixes that shipped alongside it.
 
 ## Docs
 
-### Fix README's setup section
+### Reconcile README's product story with what the backend accepts
 
-**What:** Rewrite README's setup from CLAUDE.md's Commands table (`mise install`, `uv sync`, seed, uvicorn, and the `web/` `npm ci` / build steps), and correct the repo tree.
+**What:** README pitches "Nego", a general procurement agent ("500kg of produce. Maximum KES 80,000"). The backend only accepts photography (`TransactionCreate.service` is `Literal["photography"]`), and CLAUDE.md's canonical scenario is a photographer at KES 20,000. On 2026-09-14 the owner UI's fixtures were set to follow the backend. Decide which story the submission tells, and make README, the demo script and the submission copy agree.
 
-**Why:** It's the first thing judges and teammates read, and following it fails on the very first step. The submission (#9) requires a README that covers setup.
+**Why:** A judge who reads the README and then watches the demo sees two different products. The README's own example negotiation (vegetables, KES 95,000 → 80,000) cannot be run by this code.
 
-**Context:** Logged as documentation debt by the doc-sync on PR #20:
-- It says `pip install -r requirements.txt`, but there's no `requirements.txt` (the project uses uv and `pyproject.toml`).
-- It asks for Python 3.10+, but the project pins 3.12.
-- It lists the uvicorn command twice.
-- Its tree shows `app/policy/`, but the code is `app/policy.py`.
-- Its pitch is "Nego", a procurement agent ("500kg of produce. Maximum KES 80,000"). The backend only accepts photography (`TransactionCreate.service` is `Literal["photography"]`), and CLAUDE.md's canonical scenario is a photographer at KES 20,000. On 2026-09-14 the owner UI's fixtures were set to follow the backend. Reconcile the product story here, together with the submission copy.
+**Context:** This is what's left of the original "Fix README's setup section" item. The mechanical half of that item was done by the doc-sync on 2026-09-18 (v0.3.0.0): the setup now uses `mise install` / `uv sync` / `npm ci` instead of a `requirements.txt` that doesn't exist, the Python pin says 3.12, the duplicated uvicorn line is gone, the repo tree matches the real module layout, and the README gained an Owner UI section and a test/run section that match CLAUDE.md's Commands table.
 
-The doc-sync skipped it because it's a rewrite of more than 10 lines. Do it after build step 1, so the web/ commands are real.
+What remains is the narrative call, which a doc-sync must not make on its own: either narrow the README's pitch to the photography slice the code actually serves, or keep procurement as the vision and mark the prototype's single supported category explicitly, in both README and the submission.
 
 **Effort:** S
 **Priority:** P2
-**Depends on:** Owner UI build step 1; part of issue #9
+**Depends on:** part of issue #9
 
 ## Completed
 

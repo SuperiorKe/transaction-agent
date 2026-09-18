@@ -515,7 +515,7 @@ def decline(session: Session, tx: Transaction) -> None:
     session.commit()
 
 
-# --- confirmation call flow (stretch) ----------------------------------------------------------
+# --- confirmation call flow ---------------------------------------------------------------------
 
 
 async def _dial_confirmation(

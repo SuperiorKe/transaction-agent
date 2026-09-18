@@ -602,7 +602,7 @@ async def test_decline_with_no_recommendation_writes_no_approval_row(session):
     assert session.scalars(select(Approval)).all() == []
 
 
-# --- confirmation call flow (stretch) ------------------------------------------------------------
+# --- confirmation call flow ----------------------------------------------------------------------
 
 
 async def _approved_tx(session):

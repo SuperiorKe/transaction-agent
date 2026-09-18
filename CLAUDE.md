@@ -111,7 +111,7 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
 | Workflow | Plain asyncio tasks |
 | Demo fallback | A rehearsal recording, labelled on screen and never presented as live |
 
-Owner routes are local only. `app/middleware.py` returns 403 for anything arriving through the tunnel (it carries a `cf-connecting-ip` header) except `/webhooks/*`. Voice callbacks go to `/webhooks/voice/{VOICE_WEBHOOK_SECRET}`. Twilio does sign its webhooks (`X-Twilio-Signature`), unlike AT; validating that signature is a stretch goal, the secret-path scheme is the baseline auth for now.
+Owner routes are local only. `app/middleware.py` gates every non-webhook path on three independent checks, each returning 403: the request must not arrive through the tunnel (it adds a `cf-connecting-ip` header), its `Host` must be a loopback spelling (`localhost`, `127.0.0.1`, `[::1]`, with an optional port — names are never resolved, so DNS rebinding can't get in), and a mutating request (POST/PUT/PATCH/DELETE) carrying an `Origin` must have a loopback origin too, which stops a foreign page from using the owner's local API as its call trigger. `/webhooks/*` is exempt from all three. Voice callbacks go to `/webhooks/voice/{VOICE_WEBHOOK_SECRET}`. Twilio does sign its webhooks (`X-Twilio-Signature`), unlike AT; validating that signature is a stretch goal, the secret-path scheme is the baseline auth for now.
 
 Vendor boundaries are enforced by `tests/test_architecture.py`:
 - `app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py` and `app/numbers.py` never import telephony or a model SDK.
