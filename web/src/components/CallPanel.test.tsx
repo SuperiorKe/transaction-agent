@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FIXTURES } from "../fixtures";
 import { CallPanel } from "./CallPanel";
@@ -14,6 +14,32 @@ describe("CallPanel", () => {
     expect(container.textContent).not.toContain("+254100000678");
     expect(screen.getByText("1:42")).toBeTruthy();
     expect(container.querySelector("mark")?.textContent).toBe("23,000");
+  });
+
+  it("shows the provider name with the 24px-bold visual weight DESIGN.md gives it", () => {
+    render(<CallPanel view={FIXTURES["awaiting-approval"]!} />);
+
+    expect(screen.getByText("Studio A")).toHaveProperty("className", "call-provider-name");
+  });
+
+  it("ticks a live call's duration off answered_at, and freezes once it has a recorded duration", () => {
+    // "negotiating": status IN_PROGRESS, answered_at set, duration_seconds still null -- the one
+    // combination DESIGN.md says should tick (CallPanel contract).
+    const negotiation = FIXTURES["negotiating"]!.negotiations[0]!;
+    const answeredAtMs = Date.parse(negotiation.answered_at as string);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(answeredAtMs + 5_000));
+
+    render(<CallPanel view={FIXTURES["negotiating"]!} />);
+    expect(screen.getByText("0:05")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(3_000);
+    });
+    expect(screen.getByText("0:08")).toBeTruthy();
+    expect(screen.queryByText("0:05")).toBeNull();
+
+    vi.useRealTimers();
   });
 
   it("says so when no call has started, rather than rendering an empty panel", () => {
