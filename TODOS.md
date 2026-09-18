@@ -45,17 +45,33 @@ The outside-voice review also suspects that once `record_offer` flushes, a SQLit
 **Priority:** P1
 **Depends on:** None; must land before owner UI build step 3 (CallPanel)
 
-### Check Host and Origin on owner routes (DNS rebinding can place real calls)
+### Recover from CONFIRMING / CONFIRMATION_FAILED with no owner-facing way out
 
-**What:** Owner routes should accept only a local `Host` (`localhost`, `127.0.0.1`, `[::1]`, with a port). `/webhooks/*` keeps accepting the tunnel host. POSTs with a foreign `Origin` should be rejected.
+**What:** `POST /{id}/approve` now calls `start_confirmation()` and `POST /{id}/retry-confirmation`
+now calls `retry_confirmation()` — the HTTP wiring this item used to be about is done, along with
+the unbounded-call and stale-negotiation-reuse bugs an adversarial `/ship` review found in the
+retry path (retries now guard-check and dial a fresh `Negotiation` row instead of reusing the
+failed one), and the confirmation call now runs on `CONFIRMATION_SYSTEM_PROMPT` instead of the
+negotiation prompt. What's left: `CONFIRMING` advances only on a Twilio callback, with no timeout
+and no `allowed_actions` entry — if the callback is lost (tunnel rotates, cloudflared dies), the
+transaction polls forever with nothing the owner can press. `CONFIRMATION_FAILED` only ever leads
+back to `CONFIRMING` via retry; there's no `decline`/abandon action if the owner wants to give up
+on confirming after a failed attempt, unlike `RESULT_READY`/`AWAITING_APPROVAL`, which both offer
+`decline`.
 
-**Why:** `app/middleware.py` treats any request without `cf-connecting-ip` as local. A `/ship` adversarial probe got `POST /transactions` with `Host: attacker.example` → 201, and a cross-origin form POST to `/transactions/{id}/start` → 202, which dials. A page using DNS rebinding in the owner's browser could create and start transactions while the API runs, placing real paid Twilio calls, capped only by `max_calls_per_day`.
+**Why:** A stuck `CONFIRMING` or a `CONFIRMATION_FAILED` an owner doesn't want to keep retrying are
+both dead ends the owner UI can only render as "waiting" forever.
 
-**Context:** Found by the `/ship` review of owner UI build step 1 (2026-09-16). This predates the owner UI; the UI only makes the browser the main client. Starlette's `TrustedHostMiddleware` covers the Host half, but it applies to every path, so it must exempt `/webhooks/*` or live inside `LocalOnlyOwnerRoutes`. The existing tests use `TestClient`'s default `testserver` host, so they need an allowed test host. Add tests for foreign Host, foreign Origin, local Origin and tunnel webhooks.
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+Also unresolved from the same review: `POST /approve` starts confirmation in the same request as
+recording the approval, with only `StaleOffer`/`CallGuardBlocked` caught — any other exception
+between the two (an unset `current_provider_id`, a DB error) leaves the transaction at `APPROVED`,
+which has one outgoing edge and no advertised action. Consider either catching more broadly and
+rolling the status back, or giving `APPROVED` its own recovery action.
 
-**Effort:** S
+**Effort:** M
 **Priority:** P1
-**Depends on:** None; must land before owner UI build step 2 (the Start button)
+**Depends on:** None
 
 ### Distinguish STT failures from caller silence in the audit trail
 
@@ -80,37 +96,6 @@ The outside-voice review also suspects that once `record_offer` flushes, a SQLit
 **Effort:** S
 **Priority:** P2
 **Depends on:** None
-
-### Expose the confirmation half of the state machine over HTTP
-
-**What:** No HTTP route calls `start_confirmation()` or `retry_confirmation()`, so
-`APPROVED -> CONFIRMING -> CONFIRMED` is unreachable through the API even though both orchestrator
-functions are written and unit-tested. Meanwhile `ALLOWED_ACTIONS_BY_STATUS` still advertises
-`retry_confirmation` for `CONFIRMATION_FAILED` and `CONFIRM_RETRY_WAIT`.
-
-**Why:** The API tells clients an action is allowed and offers nowhere to send it. The owner UI
-(#7) is deliberately `allowed_actions`-driven — it renders buttons from what the server says is
-legal rather than re-deriving the state machine client-side — so it will faithfully render a button
-that 404s. Four of the eighteen statuses (`CONFIRMING`, `CONFIRM_RETRY_WAIT`, `CONFIRMED`,
-`CONFIRMATION_FAILED`) and one whole component of #7 are dead surface until this lands, and
-`APPROVED` is a non-terminal dead end.
-
-**Context:** Found while designing the owner UI; see `DESIGN.md` ("Known backend gaps").
-`start_confirmation(session, tx, *, telephony, max_calls_per_day, now)` raises `ApprovalRequired`
-unless an APPROVED approvals row exists for the current recommendation's `offer_id`.
-`retry_confirmation(session, tx, negotiation, *, telephony)` takes the negotiation, so a route must
-resolve the latest `kind="confirmation"` negotiation for the transaction itself. `approve_transaction`
-in `app/routes/transactions.py` carries a comment marking this as issue #6 priority 4 (stretch), so
-it's deferred rather than forgotten. Note also that nothing calls `schedule_confirmation_retry`, so
-`CONFIRM_RETRY_WAIT` is never entered in production; and when a `scheduler` is passed, the callback
-it hands over is `lambda: None`, so wiring a real timer would still retry nothing. Fix both when
-wiring the retry, or drop the status from the flow. Cheapest correct interim fix if the full wiring stays out
-of scope: drop `retry_confirmation` from `ALLOWED_ACTIONS_BY_STATUS` so the API stops advertising an
-action it cannot serve.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** None (the orchestrator functions already exist and are tested)
 
 ### Recover a transaction stuck at UNAVAILABLE after the call guard
 
@@ -142,6 +127,149 @@ only show "last update N min ago" (DESIGN.md decision 6).
 **Priority:** P3
 **Depends on:** None
 
+### The daily call guard still undercounts real dials
+
+**What:** `_calls_today` counts `Negotiation` rows, but a single row can place 2-3 real calls:
+`_dial`/`_dial_confirmation` each retry `place_call` up to twice on a `TelephonyError`, and
+`_on_confirmation_call_ended`'s no-answer/dropped-call redial (`dial_attempt = 2`) adds another,
+neither incrementing the count. With `MAX_CALLS_PER_DAY = N`, actual billed dials can reach
+roughly `3N`.
+
+**Why:** `MAX_CALLS_PER_DAY` is the one circuit breaker on real Twilio spend; its docstring and the
+`CallGuardBlocked` message ("Daily call limit reached") both claim a precision the counting doesn't
+have.
+
+**Context:** Found by the `/ship` adversarial and performance review of owner UI build steps 2-3
+(2026-09-18), while fixing the sharper version of this bug on the retry-confirmation route (that
+route bypassed the guard entirely by reusing a negotiation row instead of undercounting through
+one; see the "Recover from CONFIRMING / CONFIRMATION_FAILED" item above for what shipped). Count
+actual `place_call` invocations (e.g. a `call.dialed` audit event `_calls_today` sums) instead of
+negotiation rows, or accept the current per-negotiation-row semantics and rename the setting/message
+to say what it actually bounds.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### Owner-route "local only" trusts headers, never the actual peer
+
+**What:** `LocalOnlyOwnerRoutes` decides everything from `Host`/`Origin`/`cf-connecting-ip` —
+client-supplied headers — and never reads `scope["client"]`, the ASGI-reported peer address, even
+though it already reads that same field two lines earlier for the `testserver` test-only allowance.
+
+**Why:** Today the real guarantee is uvicorn's default bind to `127.0.0.1`, not this middleware. If
+anyone runs `--host 0.0.0.0` (a one-flag mistake, plausible when demoing over Wi-Fi so a judge's
+laptop can reach the projector machine), any LAN host sending `Host: localhost:8000` with no
+`Origin` gets full owner access — including `/start` and `/approve`, which place real paid calls.
+The header checks are solid defense-in-depth against tunnel leakage and DNS rebinding, but nothing
+here enforces the "local" the module docstring promises if the bind address is ever widened.
+
+**Why it's separate from the test_client bypass below:** that item is about a specific allowance
+being too loosely inferred; this one is about the middleware's whole model never checking the one
+signal (the real peer) that would make the guarantee true regardless of headers.
+
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
+### `test_client` allowance is inferred from ASGI scope, not an explicit flag
+
+**What:** `LocalOnlyOwnerRoutes.__call__` grants the `testserver` Host allowance based on
+`(scope.get("client") or (None, None))[0] == "testclient"` — a value the ASGI server writes into
+`scope`, not something the middleware's caller declares.
+
+**Why:** Under uvicorn this is never attacker-controlled, so it's not exploitable today. But the
+shipping security boundary depends on which ASGI server sits in front of it: any server or proxy
+shim that puts a client-influenced string into `scope["client"]` turns `Host: testserver` into a
+bypass. A constructor-level flag the test harness sets explicitly (`LocalOnlyOwnerRoutes(app,
+allow_testserver=True)`) doesn't have this property.
+
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### `/approve` and `/retry-confirmation` block the event loop on a real dial
+
+**What:** Both routes are `async def` and `await` a chain ending in `telephony.place_call` (up to
+two attempts, `httpx.AsyncClient(timeout=httpx.Timeout(10.0))` each). Worst case, the owner's click
+hangs for ~20s before the response returns, during which the surrounding synchronous SQLAlchemy
+work (including the N+1 in `_build_view`) also runs on the loop.
+
+**Why:** A single slow request can stall Twilio webhook callbacks for a *different*, concurrently
+in-progress call (Twilio's own webhook timeout is roughly 15s), and the owner UI's mutation
+`fetch()` in `web/src/api/client.ts` has no timeout on this path (unlike the poll's
+`REQUEST_TIMEOUT_MS`), so "Updating…" can sit for the full window with no way to cancel.
+
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+Fix direction: return 202 right after recording the decision and hand the dial to a background
+task, letting the existing 1s poll surface `CONFIRMING`/`CONFIRMATION_FAILED` — matches how `/start`
+already treats dialing as fire-and-poll rather than fire-and-wait.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
+### Eagerly-built Twilio client leaks its HTTP connection pool outside the live path
+
+**What:** `app/main.py`'s module-level `app = create_app()` builds a real `TwilioVoiceProvider`
+(and its `httpx.AsyncClient`) from `.env` at import time, before any lifespan runs `aclose()` on
+it. Both `app/openapi_export.py` and `scripts/e2e_server.py` import `app.main`, so each acquires
+(and never closes) a Twilio client's connection pool purely as a side effect of importing the
+module, even though neither ever dials.
+
+**Why:** `openapi_export.py`'s own comment claims "the app is built offline with no .env" — true
+for the app it renders, false for the module-level one it imports alongside it, which makes
+`uv run python -m app.openapi_export` (and the pytest that checks the snapshot is fresh) fragile
+against a missing or malformed `.env`.
+
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Simplification: five spots reimplement something already available
+
+**What:** `/ship`'s simplification specialist found five places doing by hand what the platform,
+runtime or an existing import already does — `web/vite.config.ts`'s ~25-line proxy error handler
+duplicates Vite 8's own default 502 response; `app/orchestrator.py::start_confirmation`'s
+`guard_checked` flag exists for a hypothetical caller that doesn't exist (the one production call
+site always passes `True`); `web/src/api/client.ts`'s manual `AbortController`/`setTimeout`/
+`clearTimeout` timeout plumbing duplicates `AbortSignal.timeout` + `AbortSignal.any` (both
+available in the pinned Node/jsdom); `web/src/App.tsx`'s `nairobiToday()` builds an ISO date by
+hand when the `en-CA` `Intl.DateTimeFormat` it already calls formats as `YYYY-MM-DD` directly; and
+the now-removed `CONFIRM_RETRY_WAIT` state (fixed in this same review, see above).
+
+**Why:** None of these are bugs — they're ~46 lines of code doing what a one-line call already
+would, each an extra thing to maintain and read past.
+
+**Context:** Found by the `/ship` simplification specialist on owner UI build steps 2-3
+(2026-09-18). Advisory-only lens; never auto-applied.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### e2e_server ships an unauthenticated arbitrary-transition route
+
+**What:** `scripts/e2e_server.py`'s `POST /__e2e/transactions/{id}/transition` bypasses every
+policy check and is reachable by anything that satisfies the loopback middleware. It lives under
+`scripts/`, not `tests/`, so nothing in packaging excludes it.
+
+**Why:** Contained today by the `_DB_DIR` guard (refuses to run against anything but a throwaway
+temp DB) and the default `127.0.0.1` bind — the same two things the peer-address TODO above says
+aren't a complete guarantee.
+
+**Context:** Found by the `/ship` adversarial review of owner UI build steps 2-3 (2026-09-18).
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ## Infrastructure
 
 ### Run the test suites in CI on every push and PR
@@ -168,28 +296,90 @@ only show "last update N min ago" (DESIGN.md decision 6).
 **Priority:** P3
 **Depends on:** Owner UI build step 1 (web/package.json exists)
 
-### Index audit_events for the per-poll status history
+### Index the tables the per-poll view reads
 
-**What:** Add `Index("ix_audit_tx_type", AuditEvent.transaction_id, AuditEvent.event_type)` in `app/models.py`, then delete `transaction_agent.db` and re-seed. There are no migrations, and `create_all` won't add an index to an existing table.
+**What:** Add `Index("ix_audit_tx_type", AuditEvent.transaction_id, AuditEvent.event_type)`,
+`Index("ix_transcript_turns_negotiation", TranscriptTurn.negotiation_id)`,
+`Index("ix_offers_negotiation", Offer.negotiation_id)` and
+`Index("ix_negotiations_transaction", Negotiation.transaction_id)` in `app/models.py`, then delete
+`transaction_agent.db` and re-seed. There are no migrations, and `create_all` won't add an index to
+an existing table.
 
-**Why:** `_build_view` now reads a transaction's `status.changed` rows on every 1-second poll. `audit_events` has no index on either column, and SQLite doesn't index foreign keys automatically, so each poll scans the whole table. That's negligible at demo scale (a few thousand rows), but grows with every rehearsal left in the file.
+**Why:** `_build_view` reads a transaction's negotiations, their transcript turns and offers, and
+its `status.changed` rows, on every 1-second poll. None of these foreign-key columns is indexed
+(SQLite doesn't index them automatically), so every one of those queries scans the whole table.
+Negligible at demo scale, but grows with every rehearsal left in the file, and `_build_view` also
+runs one query per negotiation rather than a bulk `IN` select — an N+1 on the same hot path.
 
-**Context:** Found by the `/ship` performance specialist and adversarial pass on owner UI build step 1 (2026-09-16). The owner chose to defer it, to avoid a DB reset mid-build.
+**Context:** The audit_events half found by the `/ship` performance specialist and adversarial pass
+on owner UI build step 1 (2026-09-16); the transcript_turns/offers/negotiations half and the N+1 by
+the `/ship` performance specialist on owner UI build steps 2-3 (2026-09-18), which also measured
+the `status.changed` query as deliberately uncapped (unlike the adjacent audit-log query's
+`.limit(50)`) and serialized whole into every response body. The owner chose to defer all of it, to
+avoid a DB reset mid-build.
 
 **Effort:** S
 **Priority:** P3
 **Depends on:** A good moment to reset the local database
 
-### Move test phone numbers out of the +2547 range
+### The font bundle ships subsets this UI never renders
 
-**What:** Change `tests/test_orchestrator.py`'s `+25471100000x` provider numbers to the `+2541…` range that CLAUDE.md prescribes.
+**What:** `web/src/main.tsx`'s six `@fontsource` imports (IBM Plex Sans/Mono, 400/500/600/700) pull
+every language subset and both `.woff`/`.woff2` formats. Measured: `web/dist` is 1.2MB, of which
+840KB is fonts — 423KB is cyrillic/cyrillic-ext/greek/vietnamese subsets a Nairobi photography UI
+never renders, and 396KB is legacy `.woff` duplicates of the `.woff2` files already present.
 
-**Why:** #9's pre-publish secret check greps for `+2547\d{8}`, and these fake numbers match it. The check can't pass cleanly while they're there.
+**Why:** `unicode-range` means the browser skips unmatched subsets at runtime, so this mostly costs
+disk and build time rather than what a viewer downloads — but the artifact FastAPI serves is ~3x
+larger than it needs to be for no benefit on this project.
 
-**Context:** Found while fixing the same problem in `tests/test_api.py` and `tests/test_main_web.py` during the `/ship` of owner UI build step 1 (2026-09-16). `app/routes/transactions.py::_mask_phone`'s docstring example (`'+254712345678'`) is documentation; decide whether #9's check should skip it.
+**Context:** Found by the `/ship` performance specialist on owner UI build steps 2-3 (2026-09-18).
+Fix: import the latin-only entrypoints (`@fontsource/ibm-plex-sans/400-latin.css`, etc.) instead of
+the unscoped ones.
 
 **Effort:** S
-**Priority:** P2
+**Priority:** P3
+**Depends on:** None
+
+### CallPanel/RecommendationCard don't match DESIGN.md's typography, color, and copy spec
+
+**What:** `/ship`'s design specialist found 8 DESIGN.md violations in the two new components
+(the layout bug that could push Approve off-screen was the 9th finding and is fixed -- see the
+`.transaction-layout` grid-area/flex rework in `web/src/styles.css`):
+
+- **Approve's label has no overage.** DESIGN.md: "when `final_price` is above `tx.max_budget`,
+  the Approve label carries the overage, `Approve KES 23,000 · KES 3,000 over your cap`". The
+  button just says "Approve".
+- **The final price has no visual weight.** DESIGN.md: base is 18px except "the final price
+  (44px bold), the provider name (24px bold)". Both render as ordinary `dl` values today.
+- **The transcript spends `--accent` on decoration.** `.transcript-agent { border-left-color:
+  var(--accent) }` — DESIGN.md reserves `--accent` for "the one primary action (Approve), and
+  nothing else".
+- **Highlighted transcript amounts are amber**, but DESIGN.md: "amber means 'needs your approval'
+  on this screen" and specifies highlighted amounts as "`--text` semibold", no ground.
+- **The transcript rows are a colored-left-border card list**, not DESIGN.md's specified "96px
+  uppercase mono speaker column" with no background/border.
+- **The `REQUIRES_APPROVAL`/`WITHIN_LIMIT` state is plain amber/green text**, not the pill with an
+  inline SVG icon (▲/✓) DESIGN.md specifies (`StatusTimeline.tsx` already has the SVG-not-glyph
+  pattern to reuse).
+- **`--amber-edge` is declared and never used.** DESIGN.md: "the approval styling (the pill and an
+  `--amber-edge` border) shows only while `approve` or `decline` is in `tx.allowed_actions`".
+- **CallPanel's Duration is a frozen word ("In progress"), not a ticking timer.** DESIGN.md gives
+  CallPanel "a ticking timer off `answered_at`"; `web/src/useTick.ts` already exists and is used
+  by `StatusTimeline`.
+
+**Why:** This is the one screen judges watch for the whole two-minute demo; none of these are
+functional bugs, but the price that decides the entire scenario (KES 23,000 against a KES 20,000
+cap) currently looks like any other label, and the accent color that's supposed to mean one thing
+("click here") appears on transcript rows that aren't clickable.
+
+**Context:** Found by the `/ship` design specialist on owner UI build steps 2-3 (2026-09-18). The
+owner chose to fix only the layout bug (a functional risk) in that ship and defer the rest to a
+`/design-review` pass, since it's real visual/CSS work distinct from the security and correctness
+fixes that shipped alongside it.
+
+**Effort:** M
+**Priority:** P3
 **Depends on:** None
 
 ## Docs
@@ -214,3 +404,23 @@ The doc-sync skipped it because it's a rewrite of more than 10 lines. Do it afte
 **Depends on:** Owner UI build step 1; part of issue #9
 
 ## Completed
+
+### Check Host and Origin on owner routes (DNS rebinding can place real calls)
+
+**What:** Owner routes should accept only a local `Host` (`localhost`, `127.0.0.1`, `[::1]`, with a port). `/webhooks/*` keeps accepting the tunnel host. POSTs with a foreign `Origin` should be rejected.
+
+**Why:** `app/middleware.py` treats any request without `cf-connecting-ip` as local. A `/ship` adversarial probe got `POST /transactions` with `Host: attacker.example` → 201, and a cross-origin form POST to `/transactions/{id}/start` → 202, which dials. A page using DNS rebinding in the owner's browser could create and start transactions while the API runs, placing real paid Twilio calls, capped only by `max_calls_per_day`.
+
+**Context:** Found by the `/ship` review of owner UI build step 1 (2026-09-16). `LocalOnlyOwnerRoutes` now checks `_is_loopback_host` (Host) and `_is_loopback_origin` (Origin, on state-changing methods and WebSocket handshakes), with `/webhooks/*` exempt.
+
+**Completed:** v0.3.0.0 (2026-09-18)
+
+### Move test phone numbers out of the +2547 range
+
+**What:** Change `tests/test_orchestrator.py`'s `+25471100000x` provider numbers to the `+2541…` range that CLAUDE.md prescribes.
+
+**Why:** #9's pre-publish secret check greps for `+2547\d{8}`, and these fake numbers match it. The check can't pass cleanly while they're there.
+
+**Context:** Found while fixing the same problem in `tests/test_api.py` and `tests/test_main_web.py` during the `/ship` of owner UI build step 1 (2026-09-16).
+
+**Completed:** v0.3.0.0 (2026-09-18)

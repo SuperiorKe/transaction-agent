@@ -80,8 +80,10 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
   - `POST /transactions/{id}/start`
   - `POST /transactions/{id}/approve`
   - `POST /transactions/{id}/decline`
-  - `POST /webhooks/voice`
-  - `POST /webhooks/call-result`
+  - `POST /transactions/{id}/retry-confirmation`
+  - `POST /parse-request` — turns free text into a `ParsedRequest` via the LLM, for the owner UI's request composer
+  - `GET /health`
+  - `POST /webhooks/voice/{secret}` — the secret-path scheme described under Stack below; every callback (Gather speech result, call status) arrives here, there is no separate `/webhooks/call-result` route
 - **Transaction state machine:**
   - `CREATED → PROVIDER_SELECTED → CALLING → NEGOTIATING`
   - `NEGOTIATING → AGREED_WITHIN_POLICY → RESULT_READY`
