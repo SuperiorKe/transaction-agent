@@ -52,7 +52,15 @@ class NegotiationCall:
     async def respond(self, message: CallerMessage) -> AgentTurn:
         # Written before the engine runs, so a record_offer tool call in this same turn sees it
         # via the last-3-provider-turns amount_heard check (contract 5) — no transcription race.
+        # Committed immediately, not just flushed: SQLite holds a write lock from flush until
+        # commit, and a poll on another connection can't see a merely-flushed row either. Without
+        # this, both a concurrent writer (e.g. /approve, a Twilio status callback) and the owner
+        # UI's poll would stall for the full model round that follows. Verified empirically with
+        # two threads against a file-backed SQLite DB: a flushed-not-committed insert blocked a
+        # second writer for the whole hold and was invisible to a concurrent reader; committing
+        # right away made both near-instant.
         self._write_transcript("provider", message.text)
+        self._session.commit()
         if self._past_hard_end():
             turn = self._hard_end()
         else:
