@@ -25,7 +25,7 @@ unzip -p Transaction_Agent_Hackathon_Document_Pack/<file>.docx word/document.xml
 
 ## Commands
 
-The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System Python 3.14 isn't used. If the shell hasn't activated mise, prefix commands with `mise exec --`.
+The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared, Node 26.8.1). System Python 3.14 isn't used. If the shell hasn't activated mise, prefix commands with `mise exec --`.
 
 | Task | Command |
 |---|---|
@@ -37,6 +37,12 @@ The toolchain is pinned in `mise.toml` (Python 3.12.14, uv, cloudflared). System
 | Tests (offline; `sim` marker excluded) | `uv run pytest` |
 | Single test | `uv run pytest tests/test_states.py::test_terminal_states_have_no_outgoing_transitions -q` |
 | Lint / format | `uv run ruff check . && uv run ruff format --check .` |
+| Regenerate the API contract after changing schemas or routes | `uv run python -m app.openapi_export` (commit `web/openapi.json`; a pytest fails when it's stale) |
+| Owner UI deps | `cd web && npm ci` |
+| Owner UI dev server (proxies the API on :8000) | `cd web && npm run dev` |
+| Owner UI tests (regenerate TS types first) | `cd web && npm test` |
+| Build the UI FastAPI serves at `/` (no restart needed) | `cd web && npm run build` |
+| Owner UI end-to-end (builds web/; temp DB, fake telephony, never dials) | `cd web && npm run e2e` |
 | Live Anthropic tests (needs `ANTHROPIC_API_KEY`) | `uv run pytest -m live` |
 | Check `ANTHROPIC_MODEL` is available to your key | `uv run python -m app.llm.anthropic` |
 
@@ -74,8 +80,10 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
   - `POST /transactions/{id}/start`
   - `POST /transactions/{id}/approve`
   - `POST /transactions/{id}/decline`
-  - `POST /webhooks/voice`
-  - `POST /webhooks/call-result`
+  - `POST /transactions/{id}/retry-confirmation`
+  - `POST /parse-request` — turns free text into a `ParsedRequest` via the LLM, for the owner UI's request composer
+  - `GET /health`
+  - `POST /webhooks/voice/{secret}` — the secret-path scheme described under Stack below; every callback (Gather speech result, call status) arrives here, there is no separate `/webhooks/call-result` route
 - **Transaction state machine:**
   - `CREATED → PROVIDER_SELECTED → CALLING → NEGOTIATING`
   - `NEGOTIATING → AGREED_WITHIN_POLICY → RESULT_READY`
@@ -99,11 +107,11 @@ Flow: Owner UI → API (FastAPI preferred) → agent orchestrator + policy engin
 | Telephony | **Twilio** Voice behind `TelephonyProvider` (`app/telephony/twilio.py`). Turn-based: callback webhook → `<Gather input="speech">` wrapping `<Say>` → `SpeechResult`/`Confidence` in the next callback → next turn. Reached through a cloudflared quick tunnel. Trial account: destination numbers must be verified under Console → Verified Caller IDs, and a trial announcement plays before connecting unless the account is topped up (remove before the judged demo). Superseded Africa's Talking (`app/telephony/africastalking.py`, kept in the repo, no longer wired into the live path) after its real-call path failed. |
 | Speech-to-text | **Twilio's built-in speech recognition** (`<Gather input="speech">`), returned inline in the telephony callback — no separate vendor, no cloud account. Superseded Google Cloud Speech-to-Text v2 (`app/speech/google.py`, `SpeechToText` interface, kept but unused) after account setup blocked a teammate mid-build. If Twilio's recognition proves unreliable on real Kenyan-accented calls, the fallback is Deepgram or AssemblyAI free tier (API-key signup only, no IAM) — not Google Cloud again. |
 | Reasoning | Anthropic Messages API behind `LLMProvider` (`app/llm/`). Model from `ANTHROPIC_MODEL` (default `claude-opus-5`, effort `low`, server-side refusal fallbacks). |
-| UI | Vite + React + TS in `web/`, built to `web/dist` and served by FastAPI |
+| UI | Vite + React + TS in `web/`, built to `web/dist` and served by FastAPI. Its design decisions and visual system (tokens, type, components) are in the root `DESIGN.md`, which stays at the root. |
 | Workflow | Plain asyncio tasks |
 | Demo fallback | A rehearsal recording, labelled on screen and never presented as live |
 
-Owner routes are local only. `app/middleware.py` returns 403 for anything arriving through the tunnel (it carries a `cf-connecting-ip` header) except `/webhooks/*`. Voice callbacks go to `/webhooks/voice/{VOICE_WEBHOOK_SECRET}`. Twilio does sign its webhooks (`X-Twilio-Signature`), unlike AT; validating that signature is a stretch goal, the secret-path scheme is the baseline auth for now.
+Owner routes are local only. `app/middleware.py` gates every non-webhook path on three independent checks, each returning 403: the request must not arrive through the tunnel (it adds a `cf-connecting-ip` header), its `Host` must be a loopback spelling (`localhost`, `127.0.0.1`, `[::1]`, with an optional port — names are never resolved, so DNS rebinding can't get in), and a mutating request (POST/PUT/PATCH/DELETE) carrying an `Origin` must have a loopback origin too, which stops a foreign page from using the owner's local API as its call trigger. `/webhooks/*` is exempt from all three. Voice callbacks go to `/webhooks/voice/{VOICE_WEBHOOK_SECRET}`. Twilio does sign its webhooks (`X-Twilio-Signature`), unlike AT; validating that signature is a stretch goal, the secret-path scheme is the baseline auth for now.
 
 Vendor boundaries are enforced by `tests/test_architecture.py`:
 - `app/agent`, `app/conversation.py`, `app/calls.py`, `app/policy.py` and `app/numbers.py` never import telephony or a model SDK.

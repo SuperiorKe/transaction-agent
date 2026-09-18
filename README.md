@@ -517,12 +517,14 @@ Instead of waiting for a user to open a chatbot and ask what to do, the agent ca
 
 The project uses a modular architecture built around:
 
-* Python
-* FastAPI
+* Python 3.12
+* FastAPI and SQLAlchemy 2, over SQLite
 * Anthropic models
 * Policy-based decision logic
 * Telephony abstraction
-* Twilio Voice integration
+* Twilio Voice integration, including its built-in speech recognition
+* A React + TypeScript owner UI (Vite), built and served by the same FastAPI app
+* An OpenAPI contract generated from the routes, which the UI's types are derived from
 * Configurable call limits
 * Human approval boundaries
 * Automated tests
@@ -680,7 +682,13 @@ The project deliberately focuses on this narrow vertical slice rather than attem
 
 ### Working components
 
-The repository contains the core agent, policy, telephony abstraction, configuration, and test structure required to demonstrate the negotiation workflow.
+The repository contains the core agent, policy, telephony abstraction, configuration, and test
+structure required to demonstrate the negotiation workflow, plus the owner UI a human uses to run
+it: compose a request, watch the call live, read the recommendation, and approve or decline.
+
+Approving is what triggers the confirmation call back to the supplier. If that call fails, the
+transaction stops at a failed state with a retry the owner has to press: nothing re-dials on its
+own.
 
 ### Operational controls
 
@@ -846,18 +854,34 @@ The repository is organized around the separation between the agent, policy logi
 transaction-agent/
 |
 ├── app/
-│   ├── agent/
-│   ├── policy/
-│   ├── telephony/
-│   ├── speech/
-│   ├── config.py
-│   └── ...
+│   ├── agent/            # prompts, tools, the negotiation engine, the call session
+│   ├── llm/              # LLMProvider interface + the Anthropic implementation
+│   ├── telephony/        # TelephonyProvider interface + Twilio, and a fake for tests
+│   ├── speech/           # SpeechToText interface (unused: Twilio transcribes inline)
+│   ├── routes/           # FastAPI routers: transactions, webhooks
+│   ├── policy.py         # deterministic offer evaluation
+│   ├── states.py         # the transaction state machine
+│   ├── orchestrator.py   # what happens after a call places, answers, or ends
+│   ├── middleware.py     # owner routes are local only
+│   ├── config.py         # every environment variable, mirrored from .env.example
+│   └── main.py           # create_app(), and the built owner UI served at /
 |
-├── tests/
-│   ├── ...
+├── web/                  # owner UI: Vite + React + TypeScript
+│   ├── src/
+│   ├── e2e/              # Playwright, driven against the built page
+│   └── openapi.json      # the API contract the UI's TypeScript types are generated from
+|
+├── tests/                # offline: no phone number and no vendor credentials needed
+├── scripts/              # e2e_server.py, the throwaway-database server web/e2e drives
 |
 ├── README.md
-├── requirements.txt
+├── CLAUDE.md             # working notes for AI coding agents on this repo
+├── DESIGN.md             # the owner UI's design decisions and visual system
+├── CHANGELOG.md          # what shipped, per version
+├── TODOS.md              # open work, with priorities
+├── session-notes/        # dated build logs from the hackathon
+├── pyproject.toml
+├── mise.toml
 ├── .env.example
 └── ...
 ```
@@ -870,11 +894,13 @@ The exact module structure may evolve as the prototype develops.
 
 ### Requirements
 
-* Python 3.10+
-* pip
+* [mise](https://mise.jdx.dev), which installs the pinned toolchain: Python 3.12.14, uv, Node 26.8.1, cloudflared
 * Git
 * A configured Anthropic API key for model-powered negotiation
 * Twilio credentials for live telephony functionality
+
+The project targets Python 3.12 specifically (`requires-python = ">=3.12,<3.13"`). A newer system
+Python will not work.
 
 Clone the repository:
 
@@ -883,17 +909,20 @@ git clone https://github.com/SuperiorKe/transaction-agent.git
 cd transaction-agent
 ```
 
-Create a virtual environment:
+Install the toolchain and the Python dependencies (uv creates and manages the virtual
+environment, so there is no `venv` step):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+mise install
+uv sync
 ```
 
-Install dependencies:
+If your shell hasn't activated mise, prefix the commands below with `mise exec --`.
+
+Install and build the owner UI:
 
 ```bash
-pip install -r requirements.txt
+cd web && npm ci && npm run build
 ```
 
 Create the local environment file:
@@ -927,16 +956,29 @@ The required values are documented in `.env.example`.
 
 ## Running the tests
 
-With the virtual environment activated:
+The Python suite runs offline. It uses an in-memory SQLite database, a fake telephony provider,
+and a scripted LLM, so no test needs a phone number or vendor credentials:
 
 ```bash
-pytest
+uv run pytest
 ```
 
-For more detailed output:
+The owner UI has its own suites. `npm test` regenerates the TypeScript types from
+`web/openapi.json` first, so a drifted API contract fails the build rather than the demo:
 
 ```bash
-pytest -v
+cd web && npm test     # unit and component tests (vitest)
+cd web && npm run e2e  # Playwright, against the built page on a throwaway database
+```
+
+The end-to-end run builds `web/`, starts its own server with a temporary database and a fake
+telephony provider, and never dials a phone.
+
+After changing a schema or a route, regenerate the API contract and commit it, or the snapshot
+test fails:
+
+```bash
+uv run python -m app.openapi_export
 ```
 
 The test suite is intended to verify core negotiation behavior without requiring every test to make a live external call.
@@ -945,14 +987,68 @@ The test suite is intended to verify core negotiation behavior without requiring
 
 ## Running the application
 
-Start the FastAPI application using the configured application entry point:
+Seed the providers listed in `.env`, then start the FastAPI application:
 
 ```bash
-uvicorn app.main:app --reload
-uvicorn app.main:app --reload
+uv run python -m app.seed
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
-When running live telephony functionality, the application must also be reachable by the configured Twilio webhook endpoint.
+The owner UI is served at `http://localhost:8000/` from `web/dist`. It is checked per request, so
+`npm run build` in `web/` takes effect without restarting uvicorn; until the first build, `/`
+returns a 404 that says so. For UI work, `cd web && npm run dev` runs Vite's dev server with the
+API proxied from port 8000.
+
+When running live telephony, the application must also be reachable by the configured Twilio
+webhook endpoint. A cloudflared quick tunnel provides that:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+Put the printed URL in `WEBHOOK_BASE_URL`. Only `/webhooks/*` is reachable through the tunnel:
+every other route is restricted to loopback (see Security considerations).
+
+---
+
+## Owner UI
+
+The human side of a transaction is a single local page, served at `http://localhost:8000/`. It is
+deliberately small: the agent does the talking, the owner decides.
+
+1. **Compose the request.** Free text goes to `POST /parse-request`, which turns it into a
+   structured mandate. Anything the text left out comes back as a named missing field rather than
+   a guess.
+2. **Watch the call.** While a call is live the page polls the transaction and shows the timeline,
+   the running transcript, each offer, and how the policy engine scored it.
+3. **Read the recommendation.** Provider, availability, final price, terms, policy status
+   (`WITHIN_LIMIT` or `REQUIRES_APPROVAL`), and the recommendation itself with its reason.
+4. **Approve or decline.** Approving starts the confirmation call; declining closes the
+   transaction.
+
+The routes behind it:
+
+| Route | What it does |
+| --- | --- |
+| `POST /transactions` | Create a transaction from a parsed mandate |
+| `GET /transactions/{id}` | The whole view the page renders: status, history, offers, transcript, audit trail |
+| `POST /transactions/{id}/start` | Select a provider and place the negotiation call |
+| `POST /transactions/{id}/approve` | Record the approval and place the confirmation call |
+| `POST /transactions/{id}/decline` | Close the transaction |
+| `POST /transactions/{id}/retry-confirmation` | Re-dial after a failed confirmation call, owner-triggered only |
+| `POST /parse-request` | Free text to a structured request, for the composer |
+| `POST /webhooks/voice/{secret}` | Every Twilio callback: speech results and call status |
+
+Approve is guarded on both ends. It must name the offer id of the current recommendation, so a
+stale page cannot approve a price that has since changed, and it checks the daily call limit
+*before* recording the approval, so a blocked call leaves the decision with the owner instead of
+stranding the transaction. A failed confirmation never re-dials by itself.
+
+The UI's TypeScript types are generated from `web/openapi.json`, which is exported from the
+FastAPI routes themselves. A test fails when the committed contract is stale, so the page and the
+API cannot drift apart quietly.
+
+Design decisions and the visual system behind the page are in `DESIGN.md`.
 
 ---
 
@@ -999,7 +1095,16 @@ A production deployment would require additional controls around:
 * Abuse prevention
 * Human approval workflows
 
-API keys and service credentials should never be committed to the repository.
+API keys and service credentials should never be committed to the repository. Supplier phone
+numbers live only in `.env`.
+
+What the prototype does enforce today: the owner routes are reachable from the local machine
+only. Every non-webhook path is rejected with a 403 if it arrives through the cloudflared tunnel,
+if its `Host` is not a loopback spelling, or if a state-changing request carries a non-loopback
+`Origin`. Host names are never resolved, so a name that happens to point at `127.0.0.1` does not
+get in either. `/webhooks/*` is the one exception, since that is the path Twilio has to reach; it
+is protected by an unguessable secret in the URL. That is baseline hardening for a local demo,
+not authentication, and it is not a substitute for the controls listed above.
 
 ---
 

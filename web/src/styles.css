@@ -1,0 +1,667 @@
+/* The owner UI's one stylesheet: DESIGN.md "Visual system" (Control Room), 1280×720 projector. */
+
+:root {
+  --bg: #0d1117;
+  --panel: #151b23;
+  --panel-2: #1b2330;
+  --line: #2a3441;
+  --text: #e6edf3;
+  --muted: #8d9aa8;
+  --accent: #2dd4e6;
+  --accent-ink: #03171b;
+  --amber: #f2b441;
+  --amber-ground: rgba(242, 180, 65, 0.13);
+  --amber-edge: #4a3d22;
+  --green: #4ac26b;
+  --red: #f47067;
+
+  /* Native scrollbars and future form controls follow the dark ground instead of the light default. */
+  color-scheme: dark;
+  scrollbar-color: var(--line) var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 18px;
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  /* Bounds the whole screen to the 1280x720 projector viewport so nothing (least of all Approve)
+     ever needs a page scroll during the demo: .timeline and .audit are flex:none (their natural
+     size), .transaction-layout is flex:1 and gets whatever's left, shrinking its own content
+     internally (see its rule) instead of pushing the page taller than the viewport. If content
+     ever legitimately exceeds this (composer validation errors, a very long transcript on a small
+     window), there's no overflow:hidden here, so the page falls back to a normal scroll rather
+     than clipping anything -- this is a height floor for the flex distribution, not a hard clip.
+     Reverted to normal block flow + page scroll under 760px (below), where "fits one screen" was
+     never the design's target in the first place. */
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* Keyboard focus is themed, never removed. Not --accent: DESIGN.md reserves it for Approve. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
+/* --- StatusTimeline ---------------------------------------------------------------------------- */
+
+.timeline {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 20px;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-icon {
+  flex: none;
+}
+
+.stage[data-mark="reached"] {
+  color: var(--text);
+}
+
+.stage[data-mark="reached"] .stage-icon {
+  color: var(--green);
+}
+
+.stage[data-mark="current"] {
+  border-color: var(--amber);
+  background: var(--amber-ground);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stage[data-mark="current"] .stage-icon {
+  color: var(--amber);
+}
+
+.stage[data-outcome="approved"],
+.stage[data-outcome="confirmed"] {
+  border-color: var(--green);
+  background: var(--panel);
+}
+
+.stage[data-outcome="approved"] .stage-icon,
+.stage[data-outcome="confirmed"] .stage-icon {
+  color: var(--green);
+}
+
+.stage[data-outcome="closed"] {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.stage[data-outcome="failed"],
+.stage[data-outcome="failed"] .stage-icon {
+  border-color: var(--red);
+  background: var(--panel);
+  color: var(--red);
+}
+
+/* The one small-text element: raw status · last update, full width under the chip row. */
+.status-line {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.status-raw {
+  color: var(--amber);
+}
+
+.status-line[data-outcome="approved"] .status-raw,
+.status-line[data-outcome="confirmed"] .status-raw {
+  color: var(--green);
+}
+
+.status-line[data-outcome="closed"] .status-raw {
+  color: var(--muted);
+}
+
+.status-line[data-outcome="failed"] .status-raw {
+  color: var(--red);
+}
+
+/* --- AuditLog ---------------------------------------------------------------------------------- */
+
+.audit {
+  margin-top: 16px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.audit-toggle:hover {
+  color: var(--text);
+}
+
+.audit-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* The type column sizes to its longest entry (e.g. confirmation.retry_scheduled), so it never runs
+   into the time column. */
+.audit-row {
+  display: grid;
+  grid-template-columns: max-content 7rem minmax(0, 1fr);
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.audit-time,
+.audit-summary,
+.audit-empty {
+  color: var(--muted);
+}
+
+.audit-summary {
+  overflow-wrap: anywhere;
+}
+
+/* --- Page states ------------------------------------------------------------------------------- */
+
+/* Not amber: amber means "needs your approval" on this screen. Dashed and muted, but never hidden. */
+.mock-strip {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: -14px -24px 12px;
+  padding: 6px 24px;
+  border-bottom: 2px dashed var(--muted);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 700;
+  text-align: center;
+}
+
+.notice {
+  max-width: 720px;
+  margin: 48px auto;
+  color: var(--muted);
+}
+
+.notice-error {
+  color: var(--red);
+}
+
+.notice a,
+.fixture-links a {
+  color: var(--text);
+}
+
+.notice a:hover,
+.fixture-links a:hover {
+  color: var(--green);
+}
+
+.fixture-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.banner {
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.banner-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* --- Request composer and constraints ---------------------------------------------------------- */
+
+.composer-page {
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+  margin: 32px auto;
+}
+
+.card {
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.card h1,
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+
+.request-composer,
+.constraint-card {
+  display: grid;
+  gap: 10px;
+}
+
+.request-composer label,
+.constraint-grid > label,
+.constraint-readonly dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--text);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.request-composer button,
+.start-button {
+  justify-self: start;
+}
+
+.start-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.constraint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+
+.constraint-grid > label {
+  display: grid;
+  gap: 5px;
+}
+
+.constraint-grid output {
+  display: block;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.constraint-grid output.unsupported {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.form-error {
+  margin: 0;
+  color: var(--red);
+}
+
+.transaction-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  /* Named areas, not source order: CallPanel spans the full right-column height so a long
+     transcript grows the right column instead of pushing RecommendationCard's Approve/Decline
+     below the fold. Without this, grid auto-flow would place ConstraintCard, CallPanel and
+     RecommendationCard left-to-right/top-to-bottom, leaving the right column's second row empty
+     and letting CallPanel's row height (driven by its own content) push row 2 down. */
+  grid-template-areas: "constraint call" "recommendation call";
+  /* row 1 (ConstraintCard) sizes to its own content; row 2 (RecommendationCard, and CallPanel's
+     lower half) takes whatever's left of the #root flex allocation. Paired with #root's height
+     cap above, this is what actually bounds RecommendationCard's height instead of letting it
+     grow to its content and push the page (and Approve) past the viewport. */
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  flex: 1;
+  /* Without this, a grid container's default min-height is its content's min-content size, which
+     would silently cancel the flex-shrink this whole fix depends on. */
+  min-height: 0;
+}
+
+.constraint-card {
+  grid-area: constraint;
+}
+
+.call-panel {
+  grid-area: call;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.recommendation-card {
+  grid-area: recommendation;
+  min-height: 0;
+}
+
+.constraint-readonly {
+  margin: 0;
+}
+
+.constraint-readonly div {
+  min-width: 0;
+}
+
+.constraint-readonly dt {
+  margin-bottom: 3px;
+}
+
+.constraint-readonly dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Live call and recommendation ------------------------------------------------------------- */
+
+.card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.call-kind,
+.transcript-speaker {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 18px;
+}
+
+.call-facts,
+.recommendation-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.call-facts div,
+.recommendation-facts div {
+  min-width: 0;
+}
+
+.call-facts dt,
+.recommendation-facts dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.call-facts dd,
+.recommendation-facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-wrap {
+  min-width: 0;
+}
+
+.transcript-wrap h3 {
+  margin: 4px 0 8px;
+  font-size: 18px;
+}
+
+.transcript {
+  display: grid;
+  gap: 8px;
+  max-height: 340px;
+  margin: 0;
+  padding: 0 10px 0 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.transcript-turn {
+  padding: 8px 10px;
+  border-left: 3px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: var(--panel-2);
+}
+
+.transcript-agent {
+  border-left-color: var(--accent);
+}
+
+.transcript-provider {
+  border-left-color: var(--green);
+}
+
+.transcript-turn p {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+mark {
+  padding: 0 2px;
+  border-radius: 2px;
+  background: var(--amber-ground);
+  color: var(--amber);
+}
+
+.call-empty,
+.recommendation-reason {
+  margin: 0;
+  color: var(--muted);
+}
+
+.recommendation-card {
+  display: grid;
+  gap: 10px;
+  /* The card's own content (state, price, coverage, deposit, terms, reason) can be taller than
+     its grid row's actual allocation (bounded by #root/.transaction-layout above). Scroll it
+     internally rather than growing past that allocation, so Approve/Decline -- the one thing on
+     this card the owner must be able to reach -- never leave the visible area. */
+  overflow-y: auto;
+}
+
+.recommendation-state {
+  margin: 0;
+  font-weight: 700;
+}
+
+.within-limit-state {
+  color: var(--green);
+}
+
+.approval-state {
+  color: var(--amber);
+}
+
+.unavailable-state {
+  color: var(--muted);
+}
+
+.terminal-state {
+  color: var(--text);
+}
+
+.recommendation-terms {
+  grid-column: 1 / -1;
+}
+
+.decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  /* Pinned to the bottom of .recommendation-card's own scroll area (not the page): the actions
+     stay reachable without scrolling even while the state/price/reason content above scrolls. The
+     negative margin + re-added padding extends the sticky footer to the card's true edges instead
+     of floating inset within .card's padding. */
+  position: sticky;
+  bottom: -14px;
+  margin: 0 -18px -14px;
+  padding: 10px 18px 14px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.approve-button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+@media (max-width: 760px) {
+  #root {
+    padding: 14px;
+    /* "Everything fits one 1280x720 screen with no scrolling" is a projector-demo requirement,
+       never the target at phone width -- revert to a normal page that scrolls as far as it needs
+       to. (Once #root isn't display:flex, .transaction-layout's flex:1/min-height:0 below are
+       inert: flex properties only take effect on a flex item, i.e. a direct child of a flex
+       container, so no override is needed for them here.) */
+    display: block;
+    height: auto;
+  }
+
+  .constraint-grid,
+  .transaction-layout,
+  .call-facts,
+  .recommendation-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .transaction-layout {
+    grid-template-areas: "constraint" "call" "recommendation";
+    grid-template-rows: none;
+  }
+
+  .call-panel,
+  .recommendation-card {
+    overflow-y: visible;
+  }
+
+  .decision-actions {
+    /* Sticky-to-the-card only makes sense while .recommendation-card is its own scroll container
+       (overflow-y: auto, above). With that reverted to visible on mobile, "position: sticky"
+       instead sticks to the page's own scroll, floating the buttons over whatever content the
+       page has scrolled to -- so on mobile the actions go back to flowing in normal document
+       order at the bottom of the card, like every other page here. */
+    position: static;
+    margin: 10px -18px -14px;
+  }
+}

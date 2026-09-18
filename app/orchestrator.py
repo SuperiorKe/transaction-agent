@@ -515,7 +515,7 @@ def decline(session: Session, tx: Transaction) -> None:
     session.commit()
 
 
-# --- confirmation call flow (stretch) ----------------------------------------------------------
+# --- confirmation call flow ---------------------------------------------------------------------
 
 
 async def _dial_confirmation(
@@ -568,6 +568,7 @@ async def start_confirmation(
     telephony: TelephonyProvider,
     max_calls_per_day: int,
     now: Callable[[], datetime] = _utcnow,
+    guard_checked: bool = False,
 ) -> Negotiation:
     """APPROVED -> CONFIRMING. Never dials without an approvals row APPROVED for the current
     recommendation's offer_id (acceptance criterion 3)."""
@@ -589,6 +590,12 @@ async def start_confirmation(
     if not approved:
         raise ApprovalRequired("no APPROVED approvals row for the current recommendation's offer")
 
+    # The API route checks before recording approval. Direct users of this orchestrator entrypoint
+    # still get the same safe ordering: never create a confirmation negotiation when the daily
+    # limit has already been reached.
+    if not guard_checked:
+        check_call_guard(session, tx, max_calls_per_day, now)
+
     transition(session, tx, TxStatus.CONFIRMING.value, "starting confirmation call")
     provider = session.get(Provider, tx.current_provider_id)
     assert provider is not None
@@ -602,7 +609,6 @@ async def start_confirmation(
         {"negotiation_id": negotiation.id, "provider_id": provider.id, "kind": "confirmation"},
     )
     session.commit()
-    check_call_guard(session, tx, max_calls_per_day, now)
     await _dial_confirmation(session, tx, negotiation, provider, telephony=telephony)
     return negotiation
 
@@ -668,32 +674,44 @@ async def _on_confirmation_call_ended(
     session.commit()
 
 
-def schedule_confirmation_retry(
+async def retry_confirmation(
     session: Session,
     tx: Transaction,
+    negotiation: Negotiation,
     *,
-    delay_seconds: int,
-    scheduler: Callable[[float, Callable[[], object]], object] | None = None,
-) -> None:
-    """CONFIRMING/CONFIRMATION_FAILED -> CONFIRM_RETRY_WAIT, and hand `delay_seconds` plus a
-    no-arg callback to `scheduler` (defaults to a no-op: the caller/tests drive the actual
-    retry_confirmation() call; production wiring can pass asyncio's loop timer)."""
-    transition(session, tx, TxStatus.CONFIRM_RETRY_WAIT.value, "confirmation retry scheduled")
-    record_event(session, tx.id, "confirmation.retry_scheduled", {"delay_seconds": delay_seconds})
-    session.commit()
-    if scheduler is not None:
-        scheduler(delay_seconds, lambda: None)
+    telephony: TelephonyProvider,
+    max_calls_per_day: int,
+    now: Callable[[], datetime] = _utcnow,
+) -> Negotiation:
+    """CONFIRMATION_FAILED -> CONFIRMING, then redial on the owner's explicit request.
 
-
-async def retry_confirmation(
-    session: Session, tx: Transaction, negotiation: Negotiation, *, telephony: TelephonyProvider
-) -> None:
-    """CONFIRM_RETRY_WAIT or CONFIRMATION_FAILED -> CONFIRMING, then redial."""
+    Dials on a FRESH confirmation Negotiation row, never the failed one. Reusing the old row would
+    let a retry bypass the daily call guard (`_calls_today` counts Negotiation rows, so a reused
+    row is invisible to it), and it would carry over the old call's `answered_at` (making the hard-
+    end timer fire on the first turn of the new call), `status`, and `dial_attempt` -- and collide
+    on `provider_call_id`'s unique constraint with a callback for the call it's replacing.
+    """
+    check_call_guard(session, tx, max_calls_per_day, now)
     transition(session, tx, TxStatus.CONFIRMING.value, "retrying confirmation call")
-    session.commit()
     provider = session.get(Provider, negotiation.provider_id)
     assert provider is not None
-    await _dial_confirmation(session, tx, negotiation, provider, telephony=telephony)
+    fresh = Negotiation(transaction_id=tx.id, provider_id=provider.id, kind="confirmation")
+    session.add(fresh)
+    session.flush()
+    record_event(
+        session,
+        tx.id,
+        "call.created",
+        {
+            "negotiation_id": fresh.id,
+            "provider_id": provider.id,
+            "kind": "confirmation",
+            "retry_of": negotiation.id,
+        },
+    )
+    session.commit()
+    await _dial_confirmation(session, tx, fresh, provider, telephony=telephony)
+    return fresh
 
 
 # --- callback -> orchestrator wiring (used by app/main.py) --------------------------------------
@@ -803,7 +821,6 @@ __all__: Sequence[str] = (
     "place_call",
     "resolve_negotiation",
     "retry_confirmation",
-    "schedule_confirmation_retry",
     "select_provider",
     "start_confirmation",
     "write_recommendation",

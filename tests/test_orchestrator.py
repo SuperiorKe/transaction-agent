@@ -33,7 +33,6 @@ from app.orchestrator import (
     place_call,
     resolve_negotiation,
     retry_confirmation,
-    schedule_confirmation_retry,
     select_provider,
     start_confirmation,
 )
@@ -90,7 +89,7 @@ def make_tx(session, *, status: str = TxStatus.CREATED.value, **overrides) -> Tr
 
 def make_provider(session, **overrides) -> Provider:
     values = dict(
-        name="Studio A", phone="+254711000001", location="Nairobi", priority=1, active=True
+        name="Studio A", phone="+254111000001", location="Nairobi", priority=1, active=True
     )
     values.update(overrides)
     provider = Provider(**values)
@@ -133,8 +132,8 @@ NOW = FakeClock(datetime(2026, 9, 10, 9, 0, tzinfo=UTC))
 
 async def test_created_to_provider_selected_picks_lowest_priority_active_untried(session):
     tx = make_tx(session)
-    make_provider(session, name="Low priority", phone="+254711000002", priority=2)
-    first = make_provider(session, name="High priority", phone="+254711000001", priority=1)
+    make_provider(session, name="Low priority", phone="+254111000002", priority=2)
+    first = make_provider(session, name="High priority", phone="+254111000001", priority=1)
 
     chosen = select_provider(session, tx)
 
@@ -156,7 +155,7 @@ async def test_created_to_failed_when_no_active_providers(session):
 async def test_select_provider_skips_already_tried_providers(session):
     tx = make_tx(session, status=TxStatus.NEXT_PROVIDER.value)
     tried = make_provider(session, priority=1)
-    untried = make_provider(session, name="Studio B", phone="+254711000002", priority=2)
+    untried = make_provider(session, name="Studio B", phone="+254111000002", priority=2)
     make_negotiation(session, tx, tried)  # already tried
 
     chosen = select_provider(session, tx)
@@ -291,7 +290,7 @@ async def test_calling_to_unavailable_when_call_ends_before_it_was_answered(sess
 async def test_unavailable_cascades_to_next_provider_when_one_is_untried(session):
     tx = make_tx(session, status=TxStatus.CALLING.value)
     first = make_provider(session, priority=1)
-    second = make_provider(session, name="Studio B", phone="+254711000002", priority=2)
+    second = make_provider(session, name="Studio B", phone="+254111000002", priority=2)
     negotiation = make_negotiation(session, tx, first, end_reason="failed")
     telephony = FakeTelephonyProvider()
 
@@ -603,7 +602,7 @@ async def test_decline_with_no_recommendation_writes_no_approval_row(session):
     assert session.scalars(select(Approval)).all() == []
 
 
-# --- confirmation call flow (stretch) ------------------------------------------------------------
+# --- confirmation call flow ----------------------------------------------------------------------
 
 
 async def _approved_tx(session):
@@ -667,6 +666,41 @@ async def test_approved_to_confirming_and_dials(session):
     assert tx.status == TxStatus.CONFIRMING.value
     assert negotiation.kind == "confirmation"
     assert negotiation.provider_call_id is not None
+
+
+async def test_start_confirmation_checks_the_call_guard_before_it_transitions(session):
+    """The guard runs before CONFIRMING and before the confirmation negotiation exists, so a
+    blocked transaction is never stranded mid-confirmation with a dangling call row."""
+    tx, provider = await _approved_tx(session)
+    make_negotiation(session, tx, provider, created_at=NOW().isoformat(timespec="milliseconds"))
+    session.commit()
+    telephony = FakeTelephonyProvider()
+
+    with pytest.raises(CallGuardBlocked):
+        await start_confirmation(session, tx, telephony=telephony, max_calls_per_day=1, now=NOW)
+
+    assert tx.status == TxStatus.APPROVED.value  # unchanged
+    assert telephony.placed_calls == []
+    assert (
+        session.scalars(select(Negotiation).where(Negotiation.kind == "confirmation")).all() == []
+    )
+
+
+async def test_start_confirmation_trusts_a_guard_the_caller_already_checked(session):
+    """The API route checks the guard before recording the approval; `guard_checked` stops it
+    being counted twice and rejecting the very call the owner just approved."""
+    tx, provider = await _approved_tx(session)
+    make_negotiation(session, tx, provider, created_at=NOW().isoformat(timespec="milliseconds"))
+    session.commit()
+    telephony = FakeTelephonyProvider()
+
+    negotiation = await start_confirmation(
+        session, tx, telephony=telephony, max_calls_per_day=1, now=NOW, guard_checked=True
+    )
+
+    assert tx.status == TxStatus.CONFIRMING.value
+    assert negotiation.kind == "confirmation"
+    assert telephony.placed_calls == [provider.phone]
 
 
 async def test_confirming_to_confirmed(session):
@@ -751,29 +785,15 @@ async def test_confirming_to_outside_authority_on_changed_terms_over_cap(session
     assert tx.status == TxStatus.AWAITING_APPROVAL.value
 
 
-async def test_confirming_to_confirm_retry_wait_and_back(session):
-    tx, provider = await _approved_tx(session)
-    tx.status = TxStatus.CONFIRMING.value
-    session.commit()
-
-    schedule_confirmation_retry(session, tx, delay_seconds=120)
-    assert tx.status == TxStatus.CONFIRM_RETRY_WAIT.value
-
-    negotiation = make_negotiation(session, tx, provider, kind="confirmation")
-    telephony = FakeTelephonyProvider()
-    await retry_confirmation(session, tx, negotiation, telephony=telephony)
-
-    assert tx.status == TxStatus.CONFIRMING.value
-    assert telephony.placed_calls == [provider.phone]
-
-
 async def test_confirmation_failed_to_confirming_via_retry(session):
     tx, provider = await _approved_tx(session)
     negotiation = make_negotiation(session, tx, provider, kind="confirmation")
     tx.status = TxStatus.CONFIRMATION_FAILED.value
     session.commit()
 
-    await retry_confirmation(session, tx, negotiation, telephony=FakeTelephonyProvider())
+    await retry_confirmation(
+        session, tx, negotiation, telephony=FakeTelephonyProvider(), max_calls_per_day=40, now=NOW
+    )
 
     assert tx.status == TxStatus.CONFIRMING.value
 
@@ -781,12 +801,61 @@ async def test_confirmation_failed_to_confirming_via_retry(session):
 async def test_confirming_to_confirmation_failed_after_two_telephony_errors(session):
     tx, provider = await _approved_tx(session)
     negotiation = make_negotiation(session, tx, provider, kind="confirmation")
-    tx.status = TxStatus.CONFIRM_RETRY_WAIT.value
+    tx.status = TxStatus.CONFIRMATION_FAILED.value
     session.commit()
 
-    await retry_confirmation(session, tx, negotiation, telephony=FailingTelephony(fail_times=2))
+    await retry_confirmation(
+        session,
+        tx,
+        negotiation,
+        telephony=FailingTelephony(fail_times=2),
+        max_calls_per_day=40,
+        now=NOW,
+    )
 
     assert tx.status == TxStatus.CONFIRMATION_FAILED.value
+
+
+async def test_retry_confirmation_is_blocked_by_the_daily_call_guard(session):
+    tx, provider = await _approved_tx(session)
+    negotiation = make_negotiation(session, tx, provider, kind="confirmation")
+    tx.status = TxStatus.CONFIRMATION_FAILED.value
+    session.commit()
+    telephony = FakeTelephonyProvider()
+
+    with pytest.raises(CallGuardBlocked):
+        await retry_confirmation(
+            session, tx, negotiation, telephony=telephony, max_calls_per_day=0, now=NOW
+        )
+
+    assert telephony.placed_calls == []
+    assert tx.status == TxStatus.CONFIRMATION_FAILED.value
+
+
+async def test_retry_confirmation_dials_a_fresh_negotiation_not_the_failed_one(session):
+    tx, provider = await _approved_tx(session)
+    stale = make_negotiation(
+        session,
+        tx,
+        provider,
+        kind="confirmation",
+        status=NegStatus.CONFIRMED.value,
+        answered_at=NOW().isoformat(),
+        dial_attempt=2,
+    )
+    tx.status = TxStatus.CONFIRMATION_FAILED.value
+    session.commit()
+
+    fresh = await retry_confirmation(
+        session, tx, stale, telephony=FakeTelephonyProvider(), max_calls_per_day=40, now=NOW
+    )
+
+    assert fresh.id != stale.id
+    assert fresh.status == NegStatus.DIALING.value
+    assert fresh.answered_at is None
+    assert fresh.dial_attempt == 1
+    # The old row's outcome is untouched -- a retry must not silently rewrite history.
+    assert stale.status == NegStatus.CONFIRMED.value
 
 
 # --- callback -> orchestrator mapping ------------------------------------------------------------
@@ -895,7 +964,7 @@ async def test_orchestrated_call_tracks_end_call_and_drives_on_call_ended(sessio
 async def test_advance_from_unavailable_stops_cleanly_when_guard_blocks_mid_cascade(session):
     tx = make_tx(session, status=TxStatus.CALLING.value)
     first = make_provider(session, priority=1)
-    second = make_provider(session, name="Studio B", phone="+254711000002", priority=2)
+    second = make_provider(session, name="Studio B", phone="+254111000002", priority=2)
     make_negotiation(session, tx, first)
     other_tx = make_tx(session)
     make_negotiation(session, other_tx, second, created_at=NOW().isoformat(timespec="milliseconds"))

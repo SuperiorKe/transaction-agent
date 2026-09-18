@@ -3,6 +3,33 @@
 All notable changes to this project are documented here.
 Versions use the 4-digit `MAJOR.MINOR.PATCH.MICRO` format from `VERSION`.
 
+## [0.3.0.0] - 2026-09-18
+
+### Added
+- **The owner UI can now compose and start a transaction, and watch it through to a confirmed booking, from a single screen.**
+  - The empty state is a request composer: type a free-text request ("Photographer for Monday in Nairobi. Max KES 20,000."), review and correct the date/location/cap/attempts it parsed out, then create and start the call in one action.
+  - A live-call panel shows the newest negotiation or confirmation call in progress — provider, masked phone number, call state, duration, counteroffers, and the transcript, with recorded amounts highlighted only when they match a real persisted offer (never a number the model merely said in passing).
+  - A recommendation card shows the offer, the policy status, and Approve/Decline/Retry — rendered only when the API's `allowed_actions` actually advertises them, never guessed client-side.
+- **Approving an offer now starts the confirmation call.** `POST /transactions/{id}/approve` validates the offer against the current recommendation, checks the daily call guard before recording the decision (so a guard block leaves the decision actionable rather than stranding it), then dials the provider back to confirm the terms on a dedicated confirmation-call script — distinct from the negotiation call, so the agent doesn't try to renegotiate a price it has no authority to change.
+- **A failed confirmation can be retried from the UI.** `POST /transactions/{id}/retry-confirmation` redials on the owner's explicit request, on a fresh call record so the daily call guard, the call timer, and the outcome of a previous attempt can never bleed into the retry.
+- **Owner routes now reject more than just the tunnel.** Beyond the existing tunnel-header check, a request must carry a loopback `Host` and, for any state-changing request, a loopback `Origin` — closing a DNS-rebinding path that could otherwise let a page in the owner's browser start real paid calls.
+
+### Fixed
+- **The Approve/Decline buttons could render below the visible 1280×720 screen** on a longer call or a longer recommendation reason — exactly the shape of the canonical demo scenario (a KES 23,000 quote against a KES 20,000 cap). The whole screen now bounds itself to one viewport with no page scroll, and any card whose own content runs long scrolls internally instead of pushing the actions off screen.
+- **A malformed or unusual status/audit row could 500 the one screen that shows a transaction**, instead of degrading gracefully.
+- **A hostless request whose ASGI `client` scope was `None`** (a real, spec-legal case) crashed the owner-route middleware instead of being rejected as not local.
+
+### Changed
+- The unused, unreachable `CONFIRM_RETRY_WAIT` status and its scheduled-retry machinery were removed from the state machine; confirmation retry is a manual, owner-triggered action only.
+
+## [0.2.1.0] - 2026-09-14
+
+### Added
+- **The owner UI has an approved look.** DESIGN.md now sets out the colours, fonts, spacing and component styles for the screen judges watch during the demo, so whoever builds `web/` starts from a decided design instead of picking their own:
+  - It was chosen from three real 1280×720 mockups of the approval moment (a KES 23,000 quote against a KES 20,000 cap).
+  - The chosen look is a dark "Control Room" theme: IBM Plex type, a cyan main action, and amber (always with a text label) for anything that needs your approval.
+  - It also lists what to check on the real projector at rehearsal, and what to change if the dark background washes out.
+
 ## [0.2.0.0] - 2026-09-12
 
 ### Added

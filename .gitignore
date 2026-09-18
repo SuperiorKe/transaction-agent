@@ -16,3 +16,16 @@ __pycache__/
 # Web
 web/node_modules/
 web/dist/
+# Generated from web/openapi.json by `npm run gen:api` (pretest/prebuild); never committed
+web/src/api/openapi.gen.ts
+web/test-results/
+web/playwright-report/
+
+# gstack tool state (design-board daemon writes .gstack/design.json here)
+.gstack/
+
+# Local session notes can contain real phone numbers and tunnel URLs; never publish them
+session-notes/
+
+# The E2E lane builds here so it never replaces the web/dist a running demo is serving
+web/dist-e2e/
