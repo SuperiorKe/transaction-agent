@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Versions use the 4-digit `MAJOR.MINOR.PATCH.MICRO` format from `VERSION`.
 
+## [0.3.1.0] - 2026-09-19
+
+### Fixed
+- **The owner UI's live transcript lagged a full model round behind the call.** `app/agent/session.py`'s `respond()` now commits the provider's transcript turn immediately, before awaiting the model's reply, instead of only at the end of the round. Verified empirically with two threads against a file-backed SQLite DB: a flushed-but-uncommitted write was both invisible to a concurrent reader and blocked a concurrent writer for the full model round; committing immediately made both near-instant. This also protects `/approve` and Twilio status callbacks from stalling behind an in-flight model call.
+- **`CONFIRMING` and `CONFIRMATION_FAILED` had no owner-facing way out.** Three related gaps, all closed:
+  - `CONFIRMING` now times out to `CONFIRMATION_FAILED` if a Twilio callback never arrives (tunnel died, callback lost) — checked lazily on every poll rather than by adding a scheduler, since the owner UI already polls every second. New setting: `CONFIRMATION_STUCK_TIMEOUT_SECONDS` (default 120).
+  - `CONFIRMATION_FAILED` now advertises `decline` alongside `retry_confirmation`, letting the owner abandon a booking after a failed confirmation call instead of retrying forever — reuses the existing `DECLINED -> CLOSED` path via a new state transition.
+  - `APPROVED` now advertises `retry_confirmation` too, recovering a transaction stranded there by an exception between recording approval and the confirmation dial.
+- **`CallPanel`/`RecommendationCard` now match `DESIGN.md`'s visual system.** The Approve button carries the price and, when over the cap, the overage (`Approve KES 23,000 · KES 3,000 over your cap`); the final price (44px) and provider name (24px) get their specified visual weight; the transcript is a 96px speaker-column layout with no `--accent` borders and `--text`-semibold highlighted amounts instead of amber; the policy pill has an inline SVG icon and shows only while a decision is pending, with the `--amber-edge` card border to match; CallPanel's Duration now ticks live off `answered_at` instead of freezing at "In progress".
+- **Owner routes now check the real ASGI-reported peer address**, not just client-supplied headers — closes the gap where binding wider than `127.0.0.1` (e.g. `--host 0.0.0.0` for a projector demo) would let any LAN peer through with a spoofed `Host` header.
+- **The Twilio client no longer opens its HTTP connection pool until first use.** Importing `app.main` (as `app/openapi_export.py` and `scripts/e2e_server.py` do) previously built a real `httpx.AsyncClient` from `.env` as a side effect, even though neither ever dials.
+- **The font bundle no longer ships language subsets this UI never renders.** Switched to the latin-only `@fontsource` entrypoints; `web/dist` dropped from 1.2MB to 516KB.
+
 ## [0.3.0.0] - 2026-09-18
 
 ### Added
