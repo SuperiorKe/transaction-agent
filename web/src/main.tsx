@@ -1,9 +1,13 @@
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-sans/700.css";
-import "@fontsource/ibm-plex-mono/400.css";
-import "@fontsource/ibm-plex-mono/600.css";
+// Latin-subset entrypoints, not the unscoped ones: this UI only ever renders Latin text (English
+// copy, KES amounts, +254 numbers), so the unscoped files' cyrillic/cyrillic-ext/greek/vietnamese
+// @font-face blocks never match at runtime (unicode-range) -- they only cost dist/ disk and build
+// time. See TODOS.md "The font bundle ships subsets this UI never renders".
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-500.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/ibm-plex-sans/latin-700.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-600.css";
 import "./styles.css";
 
 import { StrictMode } from "react";
