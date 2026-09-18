@@ -26,7 +26,6 @@ EVENT_TYPES = frozenset(
         "escalation.raised",
         "recommendation.created",
         "approval.recorded",
-        "confirmation.retry_scheduled",
         "time.hard_end",
         "error",
     }

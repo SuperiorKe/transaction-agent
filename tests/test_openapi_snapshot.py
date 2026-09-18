@@ -46,6 +46,7 @@ def test_the_snapshot_covers_the_owner_ui_routes_and_status_contract():
     owner_ui_paths = {
         "/transactions",
         "/transactions/{transaction_id}",
+        "/transactions/{transaction_id}/retry-confirmation",
         "/parse-request",
         "/health",
     }

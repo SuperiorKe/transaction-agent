@@ -26,7 +26,6 @@ class TxStatus(StrEnum):
     DECLINED = "DECLINED"
     CLOSED = "CLOSED"
     CONFIRMING = "CONFIRMING"
-    CONFIRM_RETRY_WAIT = "CONFIRM_RETRY_WAIT"
     CONFIRMED = "CONFIRMED"
     CONFIRMATION_FAILED = "CONFIRMATION_FAILED"
     FAILED = "FAILED"
@@ -74,8 +73,6 @@ ALLOWED_TRANSITIONS: frozenset[tuple[TxStatus, TxStatus]] = frozenset(
         (T.DECLINED, T.CLOSED),
         (T.APPROVED, T.CONFIRMING),
         (T.CONFIRMING, T.CONFIRMED),
-        (T.CONFIRMING, T.CONFIRM_RETRY_WAIT),
-        (T.CONFIRM_RETRY_WAIT, T.CONFIRMING),
         (T.CONFIRMING, T.CONFIRMATION_FAILED),
         (T.CONFIRMING, T.AGREED_WITHIN_POLICY),  # provider changed terms: re-approval
         (T.CONFIRMING, T.OUTSIDE_AUTHORITY),  # provider changed terms: re-approval

@@ -26,7 +26,9 @@ from app.orchestrator import (
     advance_from_unavailable,
     check_call_guard,
     place_call,
+    retry_confirmation,
     select_provider,
+    start_confirmation,
 )
 from app.orchestrator import (
     approve as orchestrator_approve,
@@ -37,6 +39,7 @@ from app.orchestrator import (
 from app.schemas import (
     ApproveBody,
     AuditEventView,
+    ErrorDetail,
     NegotiationView,
     OfferView,
     ProviderView,
@@ -50,12 +53,18 @@ from app.telephony.base import TelephonyProvider
 
 log = logging.getLogger(__name__)
 
+# String membership, not `TxStatus(tx.status) in TERMINAL_STATES`: constructing the enum raises
+# ValueError on any status value that isn't currently a member (a hand-edited row, or a DB file
+# from before a status was removed -- CLAUDE.md's "delete the DB file after a schema change" is a
+# recommendation, not a guarantee), which would 500 the one route the owner has to see a
+# transaction at all instead of just reporting it as non-terminal.
+_TERMINAL_VALUES = frozenset(status.value for status in TERMINAL_STATES)
+
 ALLOWED_ACTIONS_BY_STATUS: dict[str, tuple[str, ...]] = {
     TxStatus.CREATED.value: ("start",),
     TxStatus.RESULT_READY.value: ("approve", "decline"),
     TxStatus.AWAITING_APPROVAL.value: ("approve", "decline"),
     TxStatus.CONFIRMATION_FAILED.value: ("retry_confirmation",),
-    TxStatus.CONFIRM_RETRY_WAIT.value: ("retry_confirmation",),
 }
 
 
@@ -157,8 +166,15 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
         .order_by(AuditEvent.id)
     ).all()
     if status_events:
-        status_history = [status_events[0].payload["from"]]
-        status_history += [event.payload["to"] for event in status_events]
+        # `.get()` rather than a bare subscript: every status.changed row app/states.py writes has
+        # both keys, but a malformed one (a schema change, a hand-edited row, a test-only route)
+        # must degrade the timeline, not 500 the one route the owner has to see the transaction at
+        # all.
+        first_from = status_events[0].payload.get("from")
+        status_history = [first_from] if first_from is not None else []
+        status_history += [event.payload["to"] for event in status_events if "to" in event.payload]
+        if not status_history:
+            status_history = [tx.status]
     else:
         status_history = [tx.status]
 
@@ -171,7 +187,7 @@ def _build_view(session: Session, tx: Transaction) -> TransactionView:
     return TransactionView(
         id=tx.id,
         status=tx.status,
-        terminal=TxStatus(tx.status) in TERMINAL_STATES,
+        terminal=tx.status in _TERMINAL_VALUES,
         status_history=status_history,
         request=tx.request,
         service=tx.service,
@@ -246,6 +262,7 @@ def build_transactions_router(
         "/{transaction_id}/start",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=TransactionView,
+        responses={409: {"model": ErrorDetail}, 429: {"model": ErrorDetail}},
     )
     async def start_transaction(
         tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
@@ -288,8 +305,9 @@ def build_transactions_router(
         "/{transaction_id}/approve",
         status_code=status.HTTP_202_ACCEPTED,
         response_model=TransactionView,
+        responses={409: {"model": ErrorDetail}, 429: {"model": ErrorDetail}},
     )
-    def approve_transaction(
+    async def approve_transaction(
         body: ApproveBody, tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
     ) -> TransactionView:
         if tx.status not in (TxStatus.RESULT_READY.value, TxStatus.AWAITING_APPROVAL.value):
@@ -297,17 +315,41 @@ def build_transactions_router(
                 status.HTTP_409_CONFLICT,
                 detail=f"transaction is {tx.status}, not awaiting a decision",
             )
+        latest_recommendation = db.scalar(
+            select(Recommendation)
+            .where(Recommendation.transaction_id == tx.id)
+            .order_by(Recommendation.id.desc())
+            .limit(1)
+        )
+        if latest_recommendation is None or latest_recommendation.offer_id != body.offer_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"offer_id {body.offer_id} does not match the current recommendation",
+            )
         try:
+            # Do this before recording the approval. A guard failure must leave the decision
+            # available to the owner instead of stranding it at APPROVED.
+            check_call_guard(db, tx, settings.max_calls_per_day, now)
             orchestrator_approve(db, tx, body.offer_id)
+            await start_confirmation(
+                db,
+                tx,
+                telephony=telephony,
+                max_calls_per_day=settings.max_calls_per_day,
+                now=now,
+                guard_checked=True,
+            )
         except StaleOffer as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        # The confirmation call (APPROVED -> CONFIRMING onward) is a stretch goal (#6 priority 4)
-        # and isn't wired here: the demo scenario only needs to reach this approval/recommendation
-        # state, not a confirmed booking. `app/orchestrator.py::start_confirmation` exists and is
-        # unit-tested, ready to be called from here once that flow is finished.
+        except CallGuardBlocked as exc:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
         return _build_view(db, tx)
 
-    @router.post("/{transaction_id}/decline", response_model=TransactionView)
+    @router.post(
+        "/{transaction_id}/decline",
+        response_model=TransactionView,
+        responses={409: {"model": ErrorDetail}},
+    )
     def decline_transaction(
         tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
     ) -> TransactionView:
@@ -317,6 +359,47 @@ def build_transactions_router(
                 detail=f"transaction is {tx.status}, not awaiting a decision",
             )
         orchestrator_decline(db, tx)
+        return _build_view(db, tx)
+
+    @router.post(
+        "/{transaction_id}/retry-confirmation",
+        status_code=status.HTTP_202_ACCEPTED,
+        response_model=TransactionView,
+        responses={409: {"model": ErrorDetail}, 429: {"model": ErrorDetail}},
+    )
+    async def retry_confirmation_transaction(
+        tx: Transaction = Depends(get_tx), db: Session = Depends(get_db)
+    ) -> TransactionView:
+        if tx.status != TxStatus.CONFIRMATION_FAILED.value:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"transaction is {tx.status}, not awaiting confirmation retry",
+            )
+        negotiation = db.scalar(
+            select(Negotiation)
+            .where(
+                Negotiation.transaction_id == tx.id,
+                Negotiation.kind == "confirmation",
+            )
+            .order_by(Negotiation.created_at.desc(), Negotiation.id.desc())
+            .limit(1)
+        )
+        if negotiation is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail="transaction has no confirmation call to retry",
+            )
+        try:
+            await retry_confirmation(
+                db,
+                tx,
+                negotiation,
+                telephony=telephony,
+                max_calls_per_day=settings.max_calls_per_day,
+                now=now,
+            )
+        except CallGuardBlocked as exc:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
         return _build_view(db, tx)
 
     return router

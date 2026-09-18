@@ -13,6 +13,14 @@ RecommendationKind = Literal["ACCEPT", "ASK_USER", "DECLINE"]
 AllowedAction = Literal["start", "approve", "decline", "retry_confirmation"]
 
 
+class ErrorDetail(BaseModel):
+    """FastAPI's own shape for HTTPException: `{"detail": "<message>"}`. Declaring it on a route's
+    non-2xx responses gives the generated TS types a real type for that response, instead of the
+    UI hand-narrowing an untyped object (see `normaliseDetail` in `web/src/api/client.ts`)."""
+
+    detail: str
+
+
 class ParseRequestBody(BaseModel):
     text: str = Field(min_length=1, max_length=500)
 

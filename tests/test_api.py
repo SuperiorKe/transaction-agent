@@ -23,10 +23,24 @@ from app.orchestrator import on_call_answered, on_call_ended
 from app.routes.parse import build_parse_router
 from app.routes.transactions import build_transactions_router
 from app.states import TERMINAL_STATES, TxStatus
+from app.telephony.base import TelephonyError
 from app.telephony.fake import FakeTelephonyProvider
 
 NOW = lambda: datetime(2026, 9, 10, 9, 0, tzinfo=UTC)  # noqa: E731 - 2026-09-10 09:00 UTC = 12:00 Nairobi
 CAP = 20000
+
+
+class FailingTelephony(FakeTelephonyProvider):
+    def __init__(self, fail_times: int) -> None:
+        super().__init__()
+        self.fail_times = fail_times
+
+    async def place_call(self, to_number: str):
+        if self.fail_times:
+            self.fail_times -= 1
+            raise TelephonyError("simulated telephony failure")
+        return await super().place_call(to_number)
+
 
 VALID_TX_BODY = {
     "request": "Photographer for Monday in Nairobi. Maximum KES 20,000. Negotiate twice.",
@@ -292,10 +306,10 @@ def _tx_at_result_ready(session_factory, tx_id: str) -> int:
     return offer_id
 
 
-def test_approve_transitions_to_approved():
+def test_approve_starts_a_confirmation_call():
     session_factory = _session_factory()
     _seed_provider(session_factory)
-    app, _, _ = _build_app(session_factory=session_factory)
+    app, _, telephony = _build_app(session_factory=session_factory)
     client = TestClient(app)
     tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
     client.post(f"/transactions/{tx_id}/start")
@@ -305,8 +319,70 @@ def test_approve_transitions_to_approved():
 
     assert response.status_code == 202
     body = response.json()
-    assert body["status"] == "APPROVED"
+    assert body["status"] == "CONFIRMING"
     assert body["recommendation"]["offer_id"] == offer_id
+    assert body["negotiations"][-1]["kind"] == "confirmation"
+    assert telephony.placed_calls == ["+254100000678", "+254100000678"]
+
+
+def test_approve_guard_block_leaves_the_decision_actionable():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, _ = _build_app(session_factory=session_factory, settings=_settings(max_calls_per_day=1))
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    with session_factory() as db:
+        negotiation = db.scalar(select(Negotiation).where(Negotiation.transaction_id == tx_id))
+        negotiation.created_at = NOW().isoformat(timespec="milliseconds")
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+
+    assert response.status_code == 429
+    view = client.get(f"/transactions/{tx_id}").json()
+    assert view["status"] == "RESULT_READY"
+    assert view["allowed_actions"] == ["approve", "decline"]
+    with session_factory() as db:
+        assert db.scalars(select(Approval).where(Approval.transaction_id == tx_id)).all() == []
+
+
+def test_approve_returns_a_retryable_confirmation_failed_view_when_dialing_fails():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FailingTelephony(fail_times=0)
+    app, _, _ = _build_app(session_factory=session_factory, telephony=telephony)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    telephony.fail_times = 2
+
+    response = client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "CONFIRMATION_FAILED"
+    assert response.json()["allowed_actions"] == ["retry_confirmation"]
+
+
+def test_approve_without_any_recommendation_is_409_and_dials_nothing():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    app, _, telephony = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        db.get(Transaction, tx_id).status = TxStatus.RESULT_READY.value
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/approve", json={"offer_id": 1})
+
+    assert response.status_code == 409
+    assert "does not match the current recommendation" in response.json()["detail"]
+    assert telephony.placed_calls == []
+    with session_factory() as db:
+        assert db.scalars(select(Approval).where(Approval.transaction_id == tx_id)).all() == []
 
 
 def test_approve_with_a_stale_offer_id_is_409_and_writes_no_approval_row():
@@ -411,7 +487,184 @@ def test_decline_on_a_transaction_not_awaiting_a_decision_is_409():
     assert client.post(f"/transactions/{tx_id}/decline").status_code == 409
 
 
+# --- POST /transactions/{id}/retry-confirmation -----------------------------------------------
+
+
+def test_retry_confirmation_rejects_a_transaction_that_is_not_confirmation_failed():
+    app, _, _ = _build_app()
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 409
+
+
+def test_retry_confirmation_rejects_a_failed_transaction_without_a_confirmation_call():
+    session_factory = _session_factory()
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        db.get(Transaction, tx_id).status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 409
+    assert "no confirmation call" in response.json()["detail"]
+
+
+def test_retry_confirmation_retries_the_latest_confirmation_call():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FakeTelephonyProvider()
+    app, _, _ = _build_app(session_factory=session_factory, telephony=telephony)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        tx = db.get(Transaction, tx_id)
+        tx.status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "CONFIRMING"
+    assert response.json()["negotiations"][-1]["kind"] == "confirmation"
+    assert len(telephony.placed_calls) == 3
+
+
+def test_retry_confirmation_is_blocked_by_the_daily_call_guard():
+    """The retry button dials a real provider like any other call; it must not be a way to bypass
+    MAX_CALLS_PER_DAY just because the confirmation negotiation row already exists."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FakeTelephonyProvider()
+    app, _, _ = _build_app(
+        session_factory=session_factory,
+        telephony=telephony,
+        settings=_settings(max_calls_per_day=2),
+    )
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        negotiations = db.scalars(select(Negotiation).where(Negotiation.transaction_id == tx_id))
+        for negotiation in negotiations:
+            negotiation.created_at = NOW().isoformat(timespec="milliseconds")
+        db.get(Transaction, tx_id).status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+    calls_before = len(telephony.placed_calls)
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 429
+    assert len(telephony.placed_calls) == calls_before  # no new dial
+    view = client.get(f"/transactions/{tx_id}").json()
+    assert view["status"] == "CONFIRMATION_FAILED"
+    assert view["allowed_actions"] == ["retry_confirmation"]
+
+
+def test_retry_confirmation_dials_a_fresh_negotiation_not_the_failed_one():
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FakeTelephonyProvider()
+    app, _, _ = _build_app(session_factory=session_factory, telephony=telephony)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        failed = db.scalar(
+            select(Negotiation).where(
+                Negotiation.transaction_id == tx_id, Negotiation.kind == "confirmation"
+            )
+        )
+        failed_id = failed.id
+        db.get(Transaction, tx_id).status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 202
+    negotiations = response.json()["negotiations"]
+    assert negotiations[-1]["kind"] == "confirmation"
+    assert negotiations[-1]["id"] != failed_id
+
+
+def test_retry_confirmation_that_fails_again_stays_retryable():
+    """A retry that can't get through must land back on CONFIRMATION_FAILED with the retry still
+    advertised, rather than stranding the owner in CONFIRMING with nothing to press."""
+    session_factory = _session_factory()
+    _seed_provider(session_factory)
+    telephony = FailingTelephony(fail_times=0)
+    app, _, _ = _build_app(session_factory=session_factory, telephony=telephony)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    client.post(f"/transactions/{tx_id}/start")
+    offer_id = _tx_at_result_ready(session_factory, tx_id)
+    client.post(f"/transactions/{tx_id}/approve", json={"offer_id": offer_id})
+    with session_factory() as db:
+        db.get(Transaction, tx_id).status = TxStatus.CONFIRMATION_FAILED.value
+        db.commit()
+    telephony.fail_times = 2
+
+    response = client.post(f"/transactions/{tx_id}/retry-confirmation")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "CONFIRMATION_FAILED"
+    assert body["allowed_actions"] == ["retry_confirmation"]
+
+
+def test_retry_confirmation_unknown_transaction_is_404():
+    app, _, _ = _build_app()
+
+    assert TestClient(app).post("/transactions/stale-id/retry-confirmation").status_code == 404
+
+
+def test_confirmation_retry_is_advertised_only_after_a_failed_confirmation_call():
+    session_factory = _session_factory()
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        tx = db.get(Transaction, tx_id)
+        tx.status = TxStatus.CONFIRMING.value
+        db.commit()
+
+    # CONFIRMING is a real in-flight state that also advertises no actions -- the owner can only
+    # wait for the callback that resolves it, same as CONFIRMATION_FAILED before a retry.
+    assert client.get(f"/transactions/{tx_id}").json()["allowed_actions"] == []
+
+
 # --- audit trail visible on the view --------------------------------------------------------------
+
+
+def test_a_malformed_status_changed_row_degrades_the_history_instead_of_500ing():
+    """A status.changed audit row missing "from"/"to" (a hand-edited row, a future schema change,
+    a test-only route) must not KeyError inside the one route the owner has to see a transaction
+    at all."""
+    session_factory = _session_factory()
+    app, _, _ = _build_app(session_factory=session_factory)
+    client = TestClient(app)
+    tx_id = client.post("/transactions", json=VALID_TX_BODY).json()["id"]
+    with session_factory() as db:
+        tx = db.get(Transaction, tx_id)
+        record_event(db, tx.id, "status.changed", {"reason": "hand-edited, no from/to"})
+        db.commit()
+
+    response = client.get(f"/transactions/{tx_id}")
+
+    assert response.status_code == 200
+    assert response.json()["status_history"] == ["CREATED"]
 
 
 def test_view_includes_the_audit_trail_newest_first():

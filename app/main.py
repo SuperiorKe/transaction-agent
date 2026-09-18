@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.types import Receive, Scope, Send
 
 from app.agent.engine import NegotiationEngine
-from app.agent.prompts import NEGOTIATION_SYSTEM_PROMPT
+from app.agent.prompts import CONFIRMATION_SYSTEM_PROMPT, NEGOTIATION_SYSTEM_PROMPT
 from app.agent.session import NegotiationCall
 from app.agent.tools import NegotiationToolExecutor
 from app.calls import AgentFactory, CallCoordinator
@@ -91,9 +91,16 @@ def _build_negotiation_agent_factory(
 
         tx = db.get(Transaction, negotiation.transaction_id)
         tools = NegotiationToolExecutor(db, tx, negotiation)
-        engine = NegotiationEngine(
-            llm_factory(settings), system_prompt=NEGOTIATION_SYSTEM_PROMPT, tools=tools
+        # A confirmation call is a different conversation than a price negotiation: it must call
+        # get_approved_terms/record_confirmation/end_call (the tools NegotiationToolExecutor
+        # already restricts it to, app/agent/tools.py CONFIRMATION_TOOLS), guided by the matching
+        # prompt -- not told to negotiate a price it has no authority to change.
+        system_prompt = (
+            NEGOTIATION_SYSTEM_PROMPT
+            if negotiation.kind == "negotiation"
+            else CONFIRMATION_SYSTEM_PROMPT
         )
+        engine = NegotiationEngine(llm_factory(settings), system_prompt=system_prompt, tools=tools)
         inner = NegotiationCall(
             db, tx, negotiation, engine, hard_end_seconds=settings.call_hard_end_seconds
         )

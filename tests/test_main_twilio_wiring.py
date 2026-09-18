@@ -118,3 +118,63 @@ def test_a_registered_negotiation_gets_the_real_negotiation_agent():
     with session_factory() as db:
         started = db.scalar(select(Negotiation).where(Negotiation.provider_call_id == "CA999"))
         assert started is not None
+    assert "on behalf of a client" in scripted.requests[0].system
+
+
+def test_a_confirmation_negotiation_gets_the_confirmation_prompt_and_tools():
+    """A negotiation with kind='confirmation' must not run on the negotiation system prompt: it
+    holds only get_approved_terms/record_confirmation/end_call, which that prompt never mentions
+    and which can't negotiate a price."""
+    session_factory = _in_memory_session_factory()
+    with session_factory() as db:
+        provider = Provider(
+            name="Test Studio", phone="+254100000001", location="Nairobi", priority=1
+        )
+        db.add(provider)
+        db.flush()
+        tx = Transaction(
+            request="Photographer for Monday. Max KES 20,000.",
+            service_date="2026-09-14",
+            location="Nairobi",
+            max_budget=20000,
+            max_attempts=2,
+            current_provider_id=provider.id,
+        )
+        db.add(tx)
+        db.flush()
+        negotiation = Negotiation(
+            transaction_id=tx.id,
+            provider_id=provider.id,
+            kind="confirmation",
+            provider_call_id="CA777",
+        )
+        db.add(negotiation)
+        db.commit()
+
+    scripted = ScriptedLLMProvider([reply("Calling to confirm your booking.")])
+
+    def llm_factory(_settings: Settings) -> LLMProvider:
+        return scripted
+
+    client = TestClient(
+        create_app(_settings(), session_factory=session_factory, llm_factory=llm_factory)
+    )
+
+    response = client.post(
+        "/webhooks/voice/s3cret",
+        data={
+            "CallSid": "CA777",
+            "CallStatus": "in-progress",
+            "Direction": "outbound-api",
+            "From": "+254200000000",
+            "To": "+254100000001",
+        },
+        headers={"cf-connecting-ip": "203.0.113.7"},
+    )
+
+    assert response.status_code == 200
+    system_prompt = scripted.requests[0].system
+    assert "calling a photography provider back to confirm" in system_prompt
+    assert "on behalf of a client" not in system_prompt
+    tool_names = {tool.name for tool in scripted.requests[0].tools}
+    assert tool_names == {"get_approved_terms", "record_confirmation", "end_call"}
